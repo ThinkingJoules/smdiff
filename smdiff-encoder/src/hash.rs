@@ -1,5 +1,7 @@
 use std::ops::Range;
-
+/*
+For future testing an integration for large files
+*/
 
 const BASE: u64 = 256;
 /// Number picked with u16::MAX as the upper bound for the pattern length.

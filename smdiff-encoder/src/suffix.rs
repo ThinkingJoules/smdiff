@@ -4,7 +4,7 @@
 
 
 
-use std::{collections::{btree_map::Entry, BTreeMap}, ops::{Bound, Range}};
+use std::{collections::BTreeMap, ops::Bound};
 
 use crate::MIN_MATCH_BYTES;
 #[derive(Debug)]
@@ -17,6 +17,8 @@ impl SuffixArray {
     pub const MIN_MATCH_BYTES: usize = MIN_MATCH_BYTES;
 
     pub fn new(sa_src: &[u8]) -> Self {
+        //we only keep the longest match so that all shorter copies come from the same position.
+
         let mut suffixes = Vec::new();
         let mut i = 0;
 
@@ -50,48 +52,64 @@ impl SuffixArray {
     ///Err(Some((prefix_byte_len,start_pos_for_matching_prefix))) if the full slice is not found, but a prefix is
     /// Err(None) if the prefix is not found (match is less than the min_match_bytes)
     pub fn search(&self, sa_src: &[u8], find: &[u8]) -> SearchResult {
-        if find.len() < Self::MIN_MATCH_BYTES {
-            return Err(None);
+        let find_len = find.len();
+        if find_len < Self::MIN_MATCH_BYTES {
+            return None;
         }
 
         let start_key = Self::bytes_to_array(&find[..Self::MIN_MATCH_BYTES]);
         //let end_key = Self::increment_slice(&start_key);
 
-        let start = *self.prefix_map.get(&start_key).ok_or(None)?;
+        let start = *self.prefix_map.get(&start_key)?;
+        if find_len == Self::MIN_MATCH_BYTES {
+            //Early return if we are only looking for the prefix.
+
+            return Some(Ok(start));
+        }
+
+
         let end = self.prefix_map.range((Bound::Excluded(start_key),Bound::Unbounded)).next().map(|a|*a.1).unwrap_or(self.suffixes.len());
-        //we do in rev because that should be the longest possible stored string in the array with the min_match_prefix
-        //we only keep the longest match so that all shorter copies come from the same position.
         //ideal for Src match addr encoding (relative addr)
         //worst case for trgt match addr encoding (addr will steadily grow.)
-        let mut best_match_len = 0;
-        let mut best_match_pos = 0;
-        //we start with the largest lexical value to make sure we match the longest possible amount of find.
-        for &i in self.suffixes[start..end].iter().rev() {
-            let suffix = &sa_src[i..];
-            let common_prefix_len = find.iter().zip(suffix).take_while(|(a, b)| a == b).count();
 
-            if common_prefix_len == find.len() {
-                return Ok(i); // full match found
+        //we start with the largest lexical value to make sure we match the longest possible amount of find.
+        //Optimization would be to store more info on the lengths of the prefixes, or allow the btree to store unequal len keys.
+        let max_len = sa_src.len() - find_len;
+        for &i in self.suffixes[start..end].iter().rev() {
+            let suffix = &sa_src[i..std::cmp::min(i + find_len, max_len)];
+            if suffix > find {
+                continue;
+            }
+            //We assume most will not be exact matches, so we check equality using this zip method.
+            let common_prefix_len = find.iter().zip(suffix).take_while(|(a, b)| a == b).count();
+            if common_prefix_len == find_len {
+                return Some(Ok(i)); // full match found
+            }
+            else {
+                return Some(Err((i,common_prefix_len)));
             }
             //can we early return?
-            if common_prefix_len > best_match_len {
-                best_match_len = common_prefix_len;
-                best_match_pos = i;
-            }
+            // if common_prefix_len > best_match_len {
+            //     best_match_len = common_prefix_len;
+            //     best_match_pos = i;
+            // }
         }
-
-        if best_match_len >= Self::MIN_MATCH_BYTES {
-            Err(Some((best_match_len, best_match_pos)))
-        } else {
-            Err(None)
-        }
+        unreachable!()
     }
 }
 
 /// - Ok(`start_pos`) if the slice is found OR
 /// - Err(Some( ( `prefix_byte_len`, `start_pos` ) )) if the full slice is not found, but a prefix is
 /// - Err(None) if the prefix is not found (match is less than the min_match_bytes)
-pub type SearchResult = Result<usize, Option<(usize, usize)>>;
+pub type _SearchResult = Result<usize, Option<(usize, usize)>>;
+
+/// - Some(Ok(`start_pos`)) if the slice is found OR
+/// - Some(Err( ( `prefix_byte_len`, `start_pos` ) )) if the full slice is not found, but a prefix >= MIN_MATCH_BYTES is
+/// - None if the prefix is not found (match is less than the min_match_bytes)
+pub type SearchResult = Option<SearchFound>;
+/// - Ok(`start_pos`) if the slice is found OR
+/// - Err( ( `start_pos`, `prefix_byte_len` ) ) if the full slice is not found, but a prefix >= MIN_MATCH_BYTES is
+pub type SearchFound = Result<usize,(usize,usize)>;
 // fn increment_slice(bytes: &[u8]) -> Option<[u8; Self::MIN_MATCH_BYTES]> {
 //     let mut result = Self::bytes_to_array(bytes);
 //     let mut i = Self::MIN_MATCH_BYTES;
@@ -119,9 +137,9 @@ mod test_super {
     fn test_insert_and_search_min() {
         let src = &[0b1011_0100, 0b0011_1011];
         let trie = SuffixArray::new(src);
-        assert_eq!(trie.search(src,src).unwrap(),0);
+        assert_eq!(trie.search(src,src).unwrap().unwrap(),0);
 
-        assert!(trie.search(src,"01".as_bytes()).unwrap_err().is_none()); // Shouldn't exist
+        assert!(trie.search(src,"01".as_bytes()).is_none()); // Shouldn't exist
     }
 
     #[test]
@@ -129,22 +147,22 @@ mod test_super {
         let src = "01234012".as_bytes();
         let trie = SuffixArray::new(src);
         //dbg!(&trie);
-        assert_eq!(trie.search(src, "01234".as_bytes()).unwrap(), 0);
-        assert_eq!(trie.search(src, "0123".as_bytes()).unwrap(), 0);
-        assert_eq!(trie.search(src, "1234".as_bytes()).unwrap(), 1);
-        assert_eq!(trie.search(src, "012".as_bytes()).unwrap(), 0);
-        assert_eq!(trie.search(src, "234".as_bytes()).unwrap(), 2);
-        assert_eq!(trie.search(src, "23".as_bytes()).unwrap(), 2);
-        assert_eq!(trie.search(src, "1233".as_bytes()).unwrap_err(), Some((3, 1)));
-        assert_eq!(trie.search(src, "1235".as_bytes()).unwrap_err(), Some((3, 1)));
-        assert_eq!(trie.search(src, "6789".as_bytes()).unwrap_err(), None);
+        assert_eq!(trie.search(src, "01234".as_bytes()).unwrap().unwrap(), 0);
+        assert_eq!(trie.search(src, "0123".as_bytes()).unwrap().unwrap(), 0);
+        assert_eq!(trie.search(src, "1234".as_bytes()).unwrap().unwrap(), 1);
+        assert_eq!(trie.search(src, "012".as_bytes()).unwrap().unwrap(), 0);
+        assert_eq!(trie.search(src, "234".as_bytes()).unwrap().unwrap(), 2);
+        assert_eq!(trie.search(src, "23".as_bytes()).unwrap().unwrap(), 2);
+        assert_eq!(trie.search(src, "1233".as_bytes()).unwrap().unwrap_err(), (3, 1));
+        assert_eq!(trie.search(src, "1235".as_bytes()).unwrap().unwrap_err(),(3, 1));
+        assert_eq!(trie.search(src, "6789".as_bytes()), None);
     }
     #[test]
     fn test_minimal_suffixes() {
         let src = "01010101010".as_bytes();
         let trie = SuffixArray::new(src);
         //dbg!(&trie);
-        assert_eq!(trie.search(src, "010".as_bytes()).unwrap(), 0);
+        assert_eq!(trie.search(src, "010".as_bytes()).unwrap().unwrap(), 0);
     }
     // #[test]
     // fn test_skip_ranges() {

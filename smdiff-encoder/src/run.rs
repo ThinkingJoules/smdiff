@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 
 
 /// This finds valid Runs per the spec. That is, no longer than 63 bytes long.
@@ -39,11 +37,7 @@ pub fn find_byte_runs(buffer: &[u8]) -> Vec<(usize, u8, u8)> {
 
     result
 }
-pub fn byte_runs_to_ranges(runs: &[(usize, u8, u8)]) -> Vec<Range<usize>> {
-    runs.iter().map(|(start, len, byte)| {
-        *start..*start + *len as usize
-    }).collect()
-}
+
 
 #[cfg(test)]
 mod tests {

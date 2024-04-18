@@ -2,7 +2,6 @@
 
 mod run;
 mod copy;
-mod hash;
 mod suffix;
 
 /*
@@ -37,159 +36,103 @@ We then start at the beginning of the Target File
 */
 include!(concat!(env!("OUT_DIR"), "/memory_config.rs"));
 
-use std::os::unix::process;
+use smdiff_common::{Add,CopySrc, Op, Run, MAX_INST_SIZE};
 
-use smdiff_common::{diff_addresses_to_i64, u_varint_encode_size, zigzag_encode, Add, Copy, CopySrc, Op, Run, MAX_INST_SIZE};
-
-use crate::{copy::{optimistic_add, scan_for_next_match}, suffix::SuffixArray};
+use crate::{copy::{find_certain_match, make_copy, scan_for_next_match, use_trgt_result, valid_target, NextMinMatch}, suffix::SuffixArray};
 const MIN_MATCH_BYTES: usize = 2; //two because we are trying to optimize for small files.
+const MIN_ADD_LEN: usize = 2; //we need to have at least 2 bytes to make an add instruction.
+pub fn encode_diff(src: &[u8], target: &[u8]) -> Vec<Op>{
 
-pub fn encode_diff(src: &[u8], target: &[u8])  {
-    //src might be empty and we might disregrad it.
-    let use_src = src.len() > MIN_MATCH_BYTES;
     //We assume that if we can fit the src and trgt in memory, the rest of our overhead is minimal
-
     //first we find all the runs in the target file.
     let mut trgt_runs = run::find_byte_runs(target);
     // we gen the prefix trie from the target
-    let mut trgt_sa = SuffixArray::new(target);
+    let trgt_sa = SuffixArray::new(target);
 
-    let mut src_sa = SuffixArray::new(src);
+    let src_sa = SuffixArray::new(src);
 
     //now we start at the beginning of the target file and start encoding.
     let mut cur_o_pos = 0;
+    let max_end_pos = target.len() - MIN_MATCH_BYTES;
     let mut last_d_addr = 0;
+    let mut last_o_addr = 0;
     trgt_runs.reverse(); //last should be the first run we would encounter.
     let mut next_run_start = trgt_runs.last().map(|(start,_,_)| *start).unwrap_or(target.len());
     let mut ops = Vec::new();
-    let mut hint = scan_for_next_match(&target, &src_sa, &trgt_sa, 0, use_src);
+    let mut next_min_match = scan_for_next_match(&target, &src_sa, &trgt_sa, 0);
     loop{
         if cur_o_pos >= target.len() {
             break;
         }
-        let mut add = false;
         if cur_o_pos == next_run_start {
             //we are at a run, we need emit this op
             let (_,len,byte) = trgt_runs.pop().unwrap();
             cur_o_pos += len as usize;
             ops.push(Op::Run(Run{len,byte}));
             next_run_start = trgt_runs.last().map(|(start,_,_)| *start).unwrap_or(target.len());
-            //out hint might be 'behind' since our run was applied
+            //out next_min_match might be 'behind' since our run was applied
             //run always gets precedence as it is the smallest possible op.
-            if hint.is_some() && hint.as_ref().unwrap().1 < cur_o_pos{
-                hint = scan_for_next_match(&target, &src_sa, &trgt_sa, cur_o_pos, use_src);
+            if next_min_match.is_some() && next_min_match.as_ref().unwrap().next_o_pos < cur_o_pos{
+                next_min_match = scan_for_next_match(&target, &src_sa, &trgt_sa, cur_o_pos);
             }
             continue;
         }
 
-        //hint should be at or ahead of cur_o_pos
-        //if it is at cur_o_pos we should emit the copy and update the hint.
+        //next_min_match should be at or ahead of cur_o_pos
+        //if it is at cur_o_pos we should emit the copy and update the next_min_match.
         //if we are not yet to it, we should emit an add so the next iteration will emit the copy.
 
-        if hint.is_some() && hint.as_ref().unwrap().1 == cur_o_pos{
-            let res = hint.unwrap();
-
+        if next_min_match.is_some() && next_min_match.as_ref().unwrap().next_o_pos == cur_o_pos{
+            //this might not be cheaper than add, so we must check first.
+            //if an add is cheaper, we should set find the next_min_match for the next iteration.
+            let NextMinMatch{ src_found, trgt_found, .. }= next_min_match.unwrap();
+            let src_match = if src_found {
+                Some(find_certain_match(target, src, &src_sa, cur_o_pos, next_run_start, max_end_pos))
+            }else{
+                None
+            };
+            let trgt_match = if trgt_found {
+                Some(find_certain_match(target, target, &trgt_sa, cur_o_pos, next_run_start, max_end_pos))
+            }else{
+                None
+            };
+            debug_assert!(if trgt_match.is_some() {valid_target(trgt_match.unwrap(), cur_o_pos as u64)}else{true});
+            let use_trgt = trgt_match.is_some() && use_trgt_result(src_match, trgt_match.unwrap(), last_d_addr, last_o_addr);
+            let copy_op = if use_trgt{
+                make_copy(trgt_match.unwrap(), CopySrc::Output, &mut last_o_addr)
+            }else{
+                //we must have src match here
+                make_copy(src_match.unwrap(), CopySrc::Dict, &mut last_d_addr)
+            };
+            if let Some(copy) = copy_op {
+                //the best copy src is better than an add op
+                cur_o_pos += copy.len as usize;
+                next_min_match = scan_for_next_match(&target, &src_sa, &trgt_sa, cur_o_pos);
+            }else{
+                // we need to find the next next_min_match starting at the next_o_pos
+                // the cur_o_pos + N: N is the min add inst length.
+                next_min_match = scan_for_next_match(&target, &src_sa, &trgt_sa, cur_o_pos + MIN_ADD_LEN);
+            }
         }
-        if hint.is_none(){
-            //we *will* find a copy here
-        }else{
-            //use the hint to emit an add.
-        }
-
-
-
-        // if !optimistic_add(last_d_addr, cur_o_pos, next_run_start - cur_o_pos){
-        //     //we need to check the tries
-        //     let test_slice = &target[cur_o_pos..];
-        //     let test_len = test_slice.len();
-        //     let trgt_match = trgt_sa.search(test_slice);
-        //     let src_match = if use_src {
-        //         src_sa.search(&target[cur_o_pos..])
-        //     }else{
-        //         Err(None)
-        //     };
-        //     let use_trgt = valid_target(&trgt_match, test_len, cur_o_pos) &&
-        //         use_trgt_result(&src_match, &trgt_match, last_d_addr, cur_o_pos as u64);
-        //     if use_trgt {
-        //         match trgt_match{
-        //             Ok(o_addr) => {
-        //                 if use_copy_o(cur_o_pos as u64, o_addr as u64, test_len){
-        //                     cur_o_pos += test_len;
-        //                     last_d_addr = o_addr as u64;
-        //                     fit_copies(CopySrc::Output, o_addr as u64, test_len, &mut ops);
-        //                 }else{
-        //                     add = true;
-        //                 }
-        //             }
-        //             Err(Some((match_len, start_pos))) => {
-        //                 if use_copy_o(cur_o_pos as u64, start_pos as u64, match_len){
-        //                     cur_o_pos += match_len;
-        //                     last_d_addr = start_pos as u64;
-        //                     fit_copies(CopySrc::Output, start_pos as u64, match_len, &mut ops);
-        //                 }else{
-        //                     add = true;
-        //                 }
-        //             },
-        //             Err(None) => unreachable!()
-        //         }
-        //     }else if use_src{
-        //         match src_match{
-        //             Ok(d_addr) => {
-        //                 if use_copy_d(last_d_addr, d_addr as u64, test_len){
-        //                     cur_o_pos += test_len;
-        //                     last_d_addr = d_addr as u64;
-        //                     fit_copies(CopySrc::Dict, d_addr as u64, test_len, &mut ops);
-        //                 }else{
-        //                     add = true;
-        //                 }
-        //             },
-        //             Err(Some((match_len, start_pos))) => {
-        //                 if use_copy_d(last_d_addr, start_pos as u64, match_len){
-        //                     cur_o_pos += match_len;
-        //                     last_d_addr = start_pos as u64;
-        //                     fit_copies(CopySrc::Dict, start_pos as u64, match_len, &mut ops);
-        //                 }else{
-        //                     add = true;
-        //                 }
-        //             },
-        //             Err(None) => {
-        //                 add = true;
-        //             }
-        //         }
-        //     }else{
-        //         add = true;
-        //     }
-        // }else{
-        //     add = true;
-        // }
-        // if add {
-        //     //first we need to look ahead to see if we can find the next copy or the next run.
-
-        //     let len = next_run_start - cur_o_pos;
-        //     let bytes = &target[cur_o_pos..];
-        //     fit_adds(bytes, len, &mut ops);
-        //     cur_o_pos = next_run_start;
-        // }
-        // //precedence: Run, Copy, Add
-    }
-
-    todo!()
-}
-fn fit_copies(src:CopySrc,addr:u64,len:usize,output: &mut Vec<Op>){
-    //we need to make sure we don't have any copies that are too large.
-    //if we do, we need to split them up.
-    let mut remaining = len;
-    loop{
-        let chunk_size = remaining.min(MAX_INST_SIZE as usize);
-        let op = Copy{src,addr,len:chunk_size as u16};
-        remaining -= chunk_size;
-        output.push(Op::Copy(op));
-        if remaining == 0{
-            break;
+        //if we are here we are going to emit an add, no checking.
+        //If there is not a next_min_match, we are done.
+        //otherwise, emit an add up to the start of the next_min_match position.
+        match next_min_match.as_ref() {
+            Some(NextMinMatch{next_o_pos, ..}) => {
+                fit_adds(&target[cur_o_pos..*next_o_pos], &mut ops);
+                cur_o_pos = *next_o_pos;
+            }
+            None => {
+                fit_adds(&target[cur_o_pos..], &mut ops);
+                break;
+            }
         }
     }
+
+    ops
 }
-fn fit_adds(bytes: &[u8], len:usize, output: &mut Vec<Op>){
+
+fn fit_adds(bytes: &[u8],output: &mut Vec<Op>){
     let mut remaining = bytes.len();
     let mut processed = 0;
     loop{
@@ -202,16 +145,4 @@ fn fit_adds(bytes: &[u8], len:usize, output: &mut Vec<Op>){
             break;
         }
     }
-}
-
-
-
-fn calculate_inst_size(address_cost: u8, inst_len: u16) -> u32 {
-    let size_indicator_cost = match inst_len {
-        0..=62 => 0,
-        63..=317 => 1,
-        _ => 2,
-    };
-    let add_cost = if address_cost > 0 { 0 } else { inst_len };
-    1 + size_indicator_cost + address_cost as u32 + add_cost as u32
 }
