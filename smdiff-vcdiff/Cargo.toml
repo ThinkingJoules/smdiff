@@ -1,0 +1,12 @@
+[package]
+name = "smdiff-vcdiff"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+vcdiff-reader = "1.0.0"
+smdiff-common ={ path = "../smdiff-common" }
+smdiff-writer ={ path = "../smdiff-writer" }
+vcdiff-common = "1.0.0"

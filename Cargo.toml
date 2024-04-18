@@ -1,0 +1,10 @@
+[workspace]
+members = [
+    "smdiff-common",
+    "smdiff-reader",
+    "smdiff-decoder",
+    "smdiff-writer",
+    "smdiff-vcdiff",
+    "smdiff-testing",
+    "smdiff-encoder"
+]
