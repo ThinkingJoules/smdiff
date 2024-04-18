@@ -16,28 +16,166 @@ pub struct SuffixArray {
 impl SuffixArray {
     pub const MIN_MATCH_BYTES: usize = MIN_MATCH_BYTES;
 
-    pub fn new(sa_src: &[u8]) -> Self {
-        //we only keep the longest match so that all shorter copies come from the same position.
+    // pub fn new(sa_src: &[u8]) -> Self {
 
-        let mut suffixes = Vec::new();
+    //     let mut suffixes = Vec::new();
+    //     let mut i = 0;
+
+    //     for win in sa_src.windows(u16::MAX as usize){
+    //         suffixes.push((i,win));
+    //         i+=1;
+    //     }
+    //     //this is likely empty for small inputs so it isn't expensive.
+    //     suffixes.sort_unstable_by(|a,b|a.1.cmp(b.1));
+
+    //     let end = sa_src.len() - Self::MIN_MATCH_BYTES;
+    //     let mut short_suffixes = Vec::new();
+    //     while i <= end{
+    //         //all of these might be prefixes of existing suffixes.
+    //         //we need to only add them to the list *if these are not prefixes of existing suffixes*
+    //         short_suffixes.push((i,&sa_src[i..]));
+    //         i += 1;
+    //     }
+    //     //should test if sorting is better to have the shortest slices first or last
+    //     //we could push the suffixes in reverse order
+    //     short_suffixes.sort_unstable_by(|a,b|a.1.cmp(b.1));
+
+
+    //     let mut prefix_map = BTreeMap::new();
+    //     let mut ignore_start_pos  = Vec::new();
+    //     let mut shift_amt = 0;
+    //     //we go in reverse so we store the longest suffixes for each prefix first.
+    //     //dbg!(&suffixes);
+    //     for (suffix_arr_pos,(_, suffix)) in suffixes.iter().enumerate() {
+    //         let prefix = Self::bytes_to_array(&suffix[0..Self::MIN_MATCH_BYTES]);
+    //         let mut range = prefix_map.range_mut(prefix..);
+    //         let trgt = range.next();
+    //         dbg!(&prefix, &suffix, &trgt);
+    //         if trgt.is_none(){
+    //             prefix_map.insert(prefix,suffix_arr_pos - shift_amt);
+    //         }else{
+    //             // //we found a longer prefix, so we might need to update the previous one.
+    //             let start = trgt.as_ref().map(|a|*a.1).unwrap();
+    //             let after_trgt = range.next();
+    //             let end = after_trgt.as_ref().map(|a|*a.1).unwrap_or(suffixes.len());
+    //             let mut store = true;
+    //             for suffix_idx in (start..end).rev(){
+    //                 let (stored_start_pos,stored_suffix) = &suffixes[suffix_idx];
+    //                 //we only keep the longest suffix for a given prefix (starts_with).
+    //                 if stored_suffix.len() < suffix.len() && suffix.starts_with(&stored_suffix){
+    //                     ignore_start_pos.push(*stored_start_pos);
+    //                     shift_amt += 1;
+    //                     store = false;
+
+    //                     //this is a dumb way, but it works...
+    //                     if let Some((s,pos)) = after_trgt {
+    //                         dbg!(s,suffix,&pos);
+    //                         *pos -= 1;
+    //                     }
+    //                     for (s,pos) in range{
+    //                         dbg!(s,suffix,&pos);
+    //                         *pos -= 1;
+    //                     }
+    //                     break;
+    //                 }
+    //             }
+    //             if store {
+    //                 prefix_map.insert(prefix,suffix_arr_pos - shift_amt);
+    //             }
+    //         }
+
+    //     }
+    //     let mut cur_ignore_idx = 0;
+    //     let end = ignore_start_pos.len();
+    //     let suffixes = suffixes.into_iter().filter_map(|(idx,_)|{
+    //         if cur_ignore_idx < end && ignore_start_pos[cur_ignore_idx] == idx{
+    //             cur_ignore_idx += 1;
+    //             None
+    //         }else{
+    //             Some(idx)
+    //         }
+    //     }).collect();
+    //     SuffixArray {
+    //         suffixes,
+    //         prefix_map,
+    //     }
+    // }
+    pub fn new(sa_src: &[u8]) -> Self {
+
+        let mut long_suffixes = Vec::new();
         let mut i = 0;
 
         for win in sa_src.windows(u16::MAX as usize){
-            suffixes.push((i,win));
+            long_suffixes.push((i,win));
             i+=1;
         }
+        //this is likely empty for small inputs so it isn't expensive.
+        long_suffixes.sort_unstable_by(|a,b|b.1.cmp(a.1));
+
         let end = sa_src.len() - Self::MIN_MATCH_BYTES;
+        let mut short_suffixes = Vec::new();
         while i <= end{
-            suffixes.push((i,&sa_src[i..]));
+            //all of these might be prefixes of existing suffixes.
+            //we need to only add them to the list *if these are not prefixes of existing suffixes*
+            short_suffixes.push((i,&sa_src[i..]));
             i += 1;
         }
+        //should test if sorting is better to have the shortest slices first or last
+        //we could push the suffixes in reverse order
+        short_suffixes.sort_unstable_by(|a,b|b.1.cmp(a.1));
+
         let mut prefix_map = BTreeMap::new();
-        for (index, suffix) in suffixes.iter() {
+        let mut suffixes  = Vec::new();
+        //We want to work from largest lexical value to smallest, so we just pop them off and push them to suffixes.
+        loop{
+            let (start_pos,suffix) = match (long_suffixes.last(),short_suffixes.last()){
+                (Some((_,long_suffix)),Some((_,short_suffix))) => {
+                    let short_len = short_suffix.len();
+                    let long_cmp = long_suffix[..short_len].cmp(short_suffix);
+                    dbg!(&long_cmp,&short_suffix,&long_suffix);
+                    if long_cmp == std::cmp::Ordering::Greater{
+                        long_suffixes.pop().unwrap()
+                    }else if long_cmp == std::cmp::Ordering::Less{
+                        short_suffixes.pop().unwrap()
+                    }else{
+                        short_suffixes.pop(); //short suffix is a prefix of the longer suffix
+                        long_suffixes.pop().unwrap()
+                    }
+                },
+                (Some(_),None) => {
+                    long_suffixes.pop().unwrap()
+                },
+                (None,Some(_)) => {
+                    //simiar to how we compare the long suffixes, we compare the short suffixes.
+                    //The popped suffix might be a superstring of last().
+                    //if it is, we need to pop the last() and push the popped.
+                    //then we continue the loop.
+                    //alternatively we could put the loop below.
+                    let (lesser_start,lesser_suffix) = short_suffixes.pop().unwrap();
+                    match short_suffixes.last(){
+                        Some((_,greater_suffix)) => {
+                            //if lesser is >= greater.len(), we don't compare (must be a different prefix)
+                            //if lesser is < greater.len(), we compare the prefix.
+                            if lesser_suffix.len() < greater_suffix.len() && greater_suffix.starts_with(lesser_suffix){
+                                continue; //leave the greater so it becomes the lesser next iteration.
+                            }else{//leave greater, return lesser
+                                (lesser_start,lesser_suffix)
+                            }
+                        },
+                        None => (lesser_start,lesser_suffix),
+                    }
+                },
+                (None,None) => {
+                    break;
+                }
+            };
             let prefix = Self::bytes_to_array(&suffix[0..Self::MIN_MATCH_BYTES]);
-            prefix_map.entry(prefix).or_insert(*index);
+            let index = suffixes.len();
+            prefix_map.entry(prefix).or_insert(index);
+            suffixes.push(start_pos);
         }
         SuffixArray {
-            suffixes: suffixes.into_iter().map(|(index, _)| index).collect(),
+            suffixes,
             prefix_map,
         }
     }
@@ -74,27 +212,22 @@ impl SuffixArray {
 
         //we start with the largest lexical value to make sure we match the longest possible amount of find.
         //Optimization would be to store more info on the lengths of the prefixes, or allow the btree to store unequal len keys.
-        let max_len = sa_src.len() - find_len;
+        let max_len = sa_src.len() - Self::MIN_MATCH_BYTES;
         for &i in self.suffixes[start..end].iter().rev() {
-            let suffix = &sa_src[i..std::cmp::min(i + find_len, max_len)];
-            if suffix > find {
-                continue;
-            }
+            let test_len = std::cmp::min(find_len, max_len - i);
+            let suffix = &sa_src[i..i+test_len];
+            let needle = &find[..test_len];
             //We assume most will not be exact matches, so we check equality using this zip method.
-            let common_prefix_len = find.iter().zip(suffix).take_while(|(a, b)| a == b).count();
-            if common_prefix_len == find_len {
+            let common_prefix_len = needle.iter().zip(suffix).take_while(|(a, b)| a == b).count();
+
+            if common_prefix_len == test_len {
                 return Some(Ok(i)); // full match found
             }
             else {
                 return Some(Err((i,common_prefix_len)));
             }
-            //can we early return?
-            // if common_prefix_len > best_match_len {
-            //     best_match_len = common_prefix_len;
-            //     best_match_pos = i;
-            // }
         }
-        unreachable!()
+        unreachable!("Implementation error: Prefix found but no match found.")
     }
 }
 
@@ -106,24 +239,8 @@ pub type _SearchResult = Result<usize, Option<(usize, usize)>>;
 /// - Some(Ok(`start_pos`)) if the slice is found OR
 /// - Some(Err( ( `prefix_byte_len`, `start_pos` ) )) if the full slice is not found, but a prefix >= MIN_MATCH_BYTES is
 /// - None if the prefix is not found (match is less than the min_match_bytes)
-pub type SearchResult = Option<SearchFound>;
-/// - Ok(`start_pos`) if the slice is found OR
-/// - Err( ( `start_pos`, `prefix_byte_len` ) ) if the full slice is not found, but a prefix >= MIN_MATCH_BYTES is
-pub type SearchFound = Result<usize,(usize,usize)>;
-// fn increment_slice(bytes: &[u8]) -> Option<[u8; Self::MIN_MATCH_BYTES]> {
-//     let mut result = Self::bytes_to_array(bytes);
-//     let mut i = Self::MIN_MATCH_BYTES;
-//     while i > 0 {
-//         i -= 1;
-//         if result[i] == 0xFF {
-//             result[i] = 0;
-//         } else {
-//             result[i] += 1;
-//             return Some(result);
-//         }
-//     }
-//     None
-// }
+pub type SearchResult = Option<Result<usize,(usize,usize)>>;
+
 
 #[cfg(test)]
 mod test_super {
@@ -153,8 +270,8 @@ mod test_super {
         assert_eq!(trie.search(src, "012".as_bytes()).unwrap().unwrap(), 0);
         assert_eq!(trie.search(src, "234".as_bytes()).unwrap().unwrap(), 2);
         assert_eq!(trie.search(src, "23".as_bytes()).unwrap().unwrap(), 2);
-        assert_eq!(trie.search(src, "1233".as_bytes()).unwrap().unwrap_err(), (3, 1));
-        assert_eq!(trie.search(src, "1235".as_bytes()).unwrap().unwrap_err(),(3, 1));
+        assert_eq!(trie.search(src, "1233".as_bytes()).unwrap().unwrap_err(), (1, 3));
+        assert_eq!(trie.search(src, "1235".as_bytes()).unwrap().unwrap_err(),(1, 3));
         assert_eq!(trie.search(src, "6789".as_bytes()), None);
     }
     #[test]
