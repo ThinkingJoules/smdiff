@@ -1,7 +1,21 @@
 
 
 
+/*
+I think we need to make variants of this for both Dict and Output.
+Output has more requirements, as we need a second index to efficiently search for *valid* matches.
+This is because we cannot emit a Copy for bytes that haven't been emitted yet.
 
+Src is very simple in that manner.
+
+Also: Store the indicies as u32 to reduce memory cost. (need to cast to usize).
+We could technically use 3 bytes for trgt since max output size is 16MB.
+Not sure if it is worth it?
+
+I think I also want to make each of these a separate struct and eventually a macro for each.
+
+I also need to do some benchmarking to see memory usage and cost per input byte.
+*/
 
 
 use std::{collections::BTreeMap, ops::Bound};
@@ -16,90 +30,6 @@ pub struct SuffixArray {
 impl SuffixArray {
     pub const MIN_MATCH_BYTES: usize = MIN_MATCH_BYTES;
 
-    // pub fn new(sa_src: &[u8]) -> Self {
-
-    //     let mut suffixes = Vec::new();
-    //     let mut i = 0;
-
-    //     for win in sa_src.windows(u16::MAX as usize){
-    //         suffixes.push((i,win));
-    //         i+=1;
-    //     }
-    //     //this is likely empty for small inputs so it isn't expensive.
-    //     suffixes.sort_unstable_by(|a,b|a.1.cmp(b.1));
-
-    //     let end = sa_src.len() - Self::MIN_MATCH_BYTES;
-    //     let mut short_suffixes = Vec::new();
-    //     while i <= end{
-    //         //all of these might be prefixes of existing suffixes.
-    //         //we need to only add them to the list *if these are not prefixes of existing suffixes*
-    //         short_suffixes.push((i,&sa_src[i..]));
-    //         i += 1;
-    //     }
-    //     //should test if sorting is better to have the shortest slices first or last
-    //     //we could push the suffixes in reverse order
-    //     short_suffixes.sort_unstable_by(|a,b|a.1.cmp(b.1));
-
-
-    //     let mut prefix_map = BTreeMap::new();
-    //     let mut ignore_start_pos  = Vec::new();
-    //     let mut shift_amt = 0;
-    //     //we go in reverse so we store the longest suffixes for each prefix first.
-    //     //dbg!(&suffixes);
-    //     for (suffix_arr_pos,(_, suffix)) in suffixes.iter().enumerate() {
-    //         let prefix = Self::bytes_to_array(&suffix[0..Self::MIN_MATCH_BYTES]);
-    //         let mut range = prefix_map.range_mut(prefix..);
-    //         let trgt = range.next();
-    //         dbg!(&prefix, &suffix, &trgt);
-    //         if trgt.is_none(){
-    //             prefix_map.insert(prefix,suffix_arr_pos - shift_amt);
-    //         }else{
-    //             // //we found a longer prefix, so we might need to update the previous one.
-    //             let start = trgt.as_ref().map(|a|*a.1).unwrap();
-    //             let after_trgt = range.next();
-    //             let end = after_trgt.as_ref().map(|a|*a.1).unwrap_or(suffixes.len());
-    //             let mut store = true;
-    //             for suffix_idx in (start..end).rev(){
-    //                 let (stored_start_pos,stored_suffix) = &suffixes[suffix_idx];
-    //                 //we only keep the longest suffix for a given prefix (starts_with).
-    //                 if stored_suffix.len() < suffix.len() && suffix.starts_with(&stored_suffix){
-    //                     ignore_start_pos.push(*stored_start_pos);
-    //                     shift_amt += 1;
-    //                     store = false;
-
-    //                     //this is a dumb way, but it works...
-    //                     if let Some((s,pos)) = after_trgt {
-    //                         dbg!(s,suffix,&pos);
-    //                         *pos -= 1;
-    //                     }
-    //                     for (s,pos) in range{
-    //                         dbg!(s,suffix,&pos);
-    //                         *pos -= 1;
-    //                     }
-    //                     break;
-    //                 }
-    //             }
-    //             if store {
-    //                 prefix_map.insert(prefix,suffix_arr_pos - shift_amt);
-    //             }
-    //         }
-
-    //     }
-    //     let mut cur_ignore_idx = 0;
-    //     let end = ignore_start_pos.len();
-    //     let suffixes = suffixes.into_iter().filter_map(|(idx,_)|{
-    //         if cur_ignore_idx < end && ignore_start_pos[cur_ignore_idx] == idx{
-    //             cur_ignore_idx += 1;
-    //             None
-    //         }else{
-    //             Some(idx)
-    //         }
-    //     }).collect();
-    //     SuffixArray {
-    //         suffixes,
-    //         prefix_map,
-    //     }
-    // }
     pub fn new(sa_src: &[u8]) -> Self {
         if sa_src.len() < Self::MIN_MATCH_BYTES {
             return SuffixArray {

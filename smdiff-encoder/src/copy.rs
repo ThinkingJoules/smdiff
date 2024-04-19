@@ -47,10 +47,10 @@ pub fn scan_for_next_match(trgt_sa_src:&[u8], trgt_sa: &SuffixArray, src_sa_src:
     None
 
 }
-pub fn unwrap_search_result(result:&SearchResult,len:usize)->(u64,u16){
+pub fn unwrap_search_result(result:&SearchResult,len:usize,abs_offset:u64)->(u64,u16){
     match result.unwrap(){
-        Ok(pos) => (pos as u64,len as u16),
-        Err((pos,found_len)) => (pos as u64,found_len as u16),
+        Ok(pos) => (pos as u64 + abs_offset,len as u16),
+        Err((pos,found_len)) => (pos as u64 + abs_offset,found_len as u16),
     }
 }
 pub fn valid_target(trgt_match: (u64,u16),cur_o_pos: u64) -> bool {

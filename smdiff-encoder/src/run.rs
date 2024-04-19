@@ -2,8 +2,8 @@
 
 /// This finds valid Runs per the spec. That is, no longer than 63 bytes long.
 /// Each element is (start, length, byte)
-pub fn find_byte_runs(buffer: &[u8]) -> Vec<(usize, u8, u8)> {
-    if buffer.len() < 2 {
+pub fn find_byte_runs(buffer: &[u8],min_len:usize) -> Vec<(usize, u8, u8)> {
+    if buffer.len() < min_len {
         return Vec::new();
     }
     let end_len = buffer.len();
@@ -18,7 +18,7 @@ pub fn find_byte_runs(buffer: &[u8]) -> Vec<(usize, u8, u8)> {
             length += 1;
             i += 1;
             continue;
-        }else if length > 1 {//we only store runs > 1, otherwise we would store all the bytes..
+        }else if length > min_len {//we only store runs > 1, otherwise we would store all the bytes..
             while length > 0 {
                 let run_length = usize::min(length, 63) as u8;
                 result.push((start, run_length, current_byte));
@@ -45,26 +45,26 @@ mod tests {
 
     #[test]
     fn test_empty_buffer() {
-        assert_eq!(find_byte_runs(&[]), Vec::<(usize, u8, u8)>::new());
+        assert_eq!(find_byte_runs(&[],2), Vec::<(usize, u8, u8)>::new());
     }
 
     #[test]
     fn test_no_repeats() {
         let buffer = [1, 2, 3, 4, 5];
-        assert_eq!(find_byte_runs(&buffer), vec![]);
+        assert_eq!(find_byte_runs(&buffer,2), vec![]);
     }
 
     #[test]
     fn test_single_byte_repeated() {
         let buffer = [7; 64]; // Exceeds max_len when split
-        let result = find_byte_runs(&buffer);
+        let result = find_byte_runs(&buffer,2);
         assert_eq!(result, vec![(0, 63, 7), (63, 1, 7)]);
     }
 
     #[test]
     fn test_mixed_runs() {
         let buffer = [1, 1, 2, 2, 2, 3];
-        let result = find_byte_runs(&buffer);
+        let result = find_byte_runs(&buffer,2);
         assert_eq!(result, vec![(0, 2, 1), (2, 3, 2)]);
     }
 }
