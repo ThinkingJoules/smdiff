@@ -9,20 +9,14 @@ use crate::{suffix::{SearchResult, SuffixArray}, MIN_MATCH_BYTES};
 Really the only thing to do here is create a scan function that will allow us to minimize the in between add instructions.
 
 */
-///Returns (len,pos) of the match.
-pub fn find_certain_match(
-    target: &[u8],
-    sa_src: &[u8],
-    sa: &SuffixArray,
+pub fn get_correct_check_len(
     cur_o_pos: usize,
     next_run_start:usize,
-    max_end_pos:usize
-) -> (u64,u16) {
-    let check_len = *[MAX_INST_SIZE as usize, next_run_start - cur_o_pos,max_end_pos-cur_o_pos].iter().min().unwrap();
-    let end_pos = cur_o_pos + check_len;
-    let next_slice = &target[cur_o_pos..end_pos];
-    unwrap_search_result(&sa.search(sa_src,next_slice), check_len)
+    max_end_pos:usize,
+) -> usize {
+    *[MAX_INST_SIZE as usize, next_run_start - cur_o_pos,max_end_pos-cur_o_pos].iter().min().unwrap()
 }
+#[derive(Debug,Clone, Copy)]
 pub struct NextMinMatch{
     pub next_o_pos: usize,
     pub src_found: bool,
@@ -30,16 +24,16 @@ pub struct NextMinMatch{
 }
 ///Returns the number of bytes to advance to get another match or None if no matches found.
 ///This only tries to find the min_mactch_bytes, it doesn't try to find the best match.
-pub fn scan_for_next_match(trgt_sa_src:&[u8], src_sa:&SuffixArray, trgt_sa: &SuffixArray,cur_pos:usize)->Option<NextMinMatch>{
+pub fn scan_for_next_match(trgt_sa_src:&[u8], trgt_sa: &SuffixArray, src_sa_src:&[u8],src_sa:&SuffixArray, cur_pos:usize)->Option<NextMinMatch>{
     //We need to find the first min match bytes that from either trie.
     //we just use a rolling window and ask the trie if we have a match (Ok())
     //in theory this will just be calls to the btrees, so it shouldn't be too costly.
     let mut offset = 0;
     for window in trgt_sa_src[cur_pos..].windows(MIN_MATCH_BYTES){
         let cur_start = cur_pos + offset;
-        let result = trgt_sa.search(trgt_sa_src,window);
-        let trgt_found = result.is_some() && valid_target(unwrap_search_result(&result, MIN_MATCH_BYTES), cur_start as u64);
-        let src_result = src_sa.search(trgt_sa_src,window);
+        let result = trgt_sa.search_restricted(trgt_sa_src,window,cur_start);
+        let trgt_found = result.is_some(); // && valid_target(unwrap_search_result(&result, MIN_MATCH_BYTES), cur_start as u64);
+        let src_result = src_sa.search(src_sa_src,window);
 
         if trgt_found || src_result.is_some(){
             return Some(NextMinMatch{
@@ -54,14 +48,15 @@ pub fn scan_for_next_match(trgt_sa_src:&[u8], src_sa:&SuffixArray, trgt_sa: &Suf
 
 }
 pub fn unwrap_search_result(result:&SearchResult,len:usize)->(u64,u16){
-    result.unwrap()
-    .map(|pos|(pos as u64,len as u16))
-    .map_err(|(pos,len)| (pos as u64,len as u16))
-    .unwrap()
+    match result.unwrap(){
+        Ok(pos) => (pos as u64,len as u16),
+        Err((pos,found_len)) => (pos as u64,found_len as u16),
+    }
 }
 pub fn valid_target(trgt_match: (u64,u16),cur_o_pos: u64) -> bool {
-    (trgt_match.0 + trgt_match.1 as u64) < cur_o_pos
+    (trgt_match.0 + trgt_match.1 as u64) <= cur_o_pos
 }
+///In a tie, returns false, as src is preferred.
 pub fn use_trgt_result(
     src: Option<(u64,u16)>,
     trgt: (u64,u16),
@@ -77,7 +72,7 @@ pub fn use_trgt_result(
     }else{true}
 }
 pub fn use_copy_op(last_addr: u64, next_addr:u64, len: u16) -> bool {
-    if len > 6 {
+    if len > 5 {
         return true;
     }
     calc_addr_cost(last_addr, next_addr) + 1 <= len as u8
