@@ -18,7 +18,7 @@ pub fn find_byte_runs(buffer: &[u8],min_len:usize) -> Vec<(usize, u8, u8)> {
             length += 1;
             i += 1;
             continue;
-        }else if length > min_len {//we only store runs > 1, otherwise we would store all the bytes..
+        }else if length >= min_len {//we only store runs > 1, otherwise we would store all the bytes..
             while length > 0 {
                 let run_length = usize::min(length, 63) as u8;
                 result.push((start, run_length, current_byte));
