@@ -1,3 +1,5 @@
+use smdiff_common::AddOp;
+
 
 
 mod run;
@@ -94,4 +96,14 @@ include!(concat!(env!("OUT_DIR"), "/memory_config.rs"));
 
 const MIN_MATCH_BYTES: usize = 2; //two because we are trying to optimize for small files.
 const MIN_ADD_LEN: usize = 2; //we need to have at least 2 bytes to make an add instruction.
-const MAX_WIN_SIZE: usize = 1 << 24; //16MB Should move this to common.
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct Add <'a> {
+    bytes: &'a [u8],
+}
+impl AddOp for Add<'_> {
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+pub type Op<'a> = smdiff_common::Op<Add<'a>>;

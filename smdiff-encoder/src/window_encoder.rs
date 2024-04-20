@@ -33,10 +33,10 @@ There are other things we do, such as check if a copy is better than an add, and
 This is trying to optimize for the smallest encoded delta size.
 */
 
-use smdiff_common::{Add,CopySrc, Op, Run, MAX_INST_SIZE};
+use smdiff_common::{Copy,CopySrc, Run, MAX_INST_SIZE, MAX_WIN_SIZE};
 
-use crate::{copy::{get_correct_check_len, make_copy, scan_for_next_match, unwrap_search_result, use_trgt_result, valid_target, NextMinMatch}, run::find_byte_runs, suffix::SuffixArray, MAX_WIN_SIZE, MIN_ADD_LEN};
-pub fn encode_window(src: &[u8],src_abs_start_pos:u64, target: &[u8],target_abs_start_pos:u64,min_run_len:usize) -> Vec<Op>{
+use crate::{copy::{get_correct_check_len, scan_for_next_match, unwrap_search_result, use_copy_op, use_trgt_result, NextMinMatch}, run::{find_byte_runs, run_end_pos}, suffix::SuffixArray, Add, Op, MIN_ADD_LEN};
+pub fn encode_window<'a>(src: &[u8],src_abs_start_pos:u64, target: &'a [u8],target_abs_start_pos:u64,min_run_len:usize) -> Vec<Op<'a>>{
     assert!(target.len() <= MAX_WIN_SIZE);
     if target.is_empty(){
         return Vec::new();
@@ -63,9 +63,19 @@ pub fn encode_window(src: &[u8],src_abs_start_pos:u64, target: &[u8],target_abs_
         if rel_o >= target.len() {
             break;
         }
-        if rel_o == next_run_start {
+        //last loop may have a copy that has made our Run(s) stale.
+        if run_end_pos(trgt_runs.last(), max_end_pos) < rel_o{
+            while  run_end_pos(trgt_runs.last(), max_end_pos) < rel_o{
+                trgt_runs.pop();
+            }
+            next_run_start = trgt_runs.last().map(|(start,_,_)| *start).unwrap_or(target.len());
+        }
+
+        //might be less than if a copy took some of our first bytes
+        if next_run_start <= rel_o {
             //we are at a run, we need emit this op
-            let (_,len,byte) = trgt_runs.pop().unwrap();
+            let (_,mut len,byte) = trgt_runs.pop().unwrap();
+            len -= (rel_o - next_run_start) as u8; //should never underflow
             rel_o += len as usize;
             ops.push(Op::Run(Run{len,byte}));
             next_run_start = trgt_runs.last().map(|(start,_,_)| *start).unwrap_or(target.len());
@@ -102,25 +112,26 @@ pub fn encode_window(src: &[u8],src_abs_start_pos:u64, target: &[u8],target_abs_
                 None
             };
             let use_trgt = trgt_match.is_some() && use_trgt_result(src_match, trgt_match.unwrap(), last_d_addr, last_o_addr);
-            debug_assert!(if use_trgt && trgt_match.is_some() {valid_target(trgt_match.unwrap(), rel_o as u64)}else{true});
-            dbg!(&src_match, &trgt_match,use_trgt);
-            let copy_op = if src_match.is_none() || use_trgt{
-                //one of these has to be Some
-                make_copy(trgt_match.unwrap(), CopySrc::Output, &mut last_o_addr)
+            let ((match_start,match_len),c_src, last_addr) = if use_trgt{
+                (trgt_match.unwrap(), CopySrc::Output,&mut last_o_addr)
             }else{
-                //we must have src match here
-                make_copy(src_match.unwrap(), CopySrc::Dict, &mut last_d_addr)
+                (src_match.unwrap(), CopySrc::Dict,&mut last_d_addr)
             };
-            dbg!(&copy_op);
-            if let Some(copy) = copy_op {
-                //the best copy src is better than an add op
-                rel_o += copy.len as usize;
+
+            //Is copy better than add?
+            if use_copy_op(*last_addr, match_start, match_len){
+                //This copy might include or 'eat into' Run(s)
+                //This is fine, we want Copys to be as long as possible.
+                //we can emit a copy
+                rel_o += match_len as usize;
+                *last_addr = match_start;
+                ops.push(Op::Copy(Copy{src: c_src, addr: match_start, len: match_len}));
                 next_min_match = scan_for_next_match(&target, &trgt_sa,&src,&src_sa,  rel_o);
-                ops.push(Op::Copy(copy));
                 continue;
-            }else{
-                // we need to find the next next_min_match starting at the next_o_pos
+            }else{// fall through to the add op
+                //we need to find the next next_min_match starting at the next_o_pos
                 // the cur_o_pos + N: N is the min add inst length.
+                //this will be read immediately below.
                 next_min_match = scan_for_next_match(&target, &trgt_sa,&src,&src_sa,  rel_o + MIN_ADD_LEN);
             }
         }
@@ -147,12 +158,16 @@ pub fn encode_window(src: &[u8],src_abs_start_pos:u64, target: &[u8],target_abs_
     ops
 }
 
-fn fit_adds(bytes: &[u8],output: &mut Vec<Op>){
+fn fit_adds<'a>(bytes: &'a [u8],output: &mut Vec<Op<'a>>){
     let mut remaining = bytes.len();
+    if remaining == 1{//emit a run of len 1
+        output.push(Op::Run(Run{len: 1, byte: bytes[0]}));
+        return;
+    }
     let mut processed = 0;
     loop{
         let chunk_size = remaining.min(MAX_INST_SIZE as usize);
-        let op = Add{bytes: bytes[processed..processed+chunk_size].to_vec()};
+        let op = Add{bytes: &bytes[processed..processed+chunk_size]};
         remaining -= chunk_size;
         processed += chunk_size;
         output.push(Op::Add(op));
@@ -165,7 +180,7 @@ fn fit_adds(bytes: &[u8],output: &mut Vec<Op>){
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smdiff_common::{Copy, Op};
+    use smdiff_common::Copy;
     #[test]
     fn test_empty_files(){
         let src = [];
@@ -179,7 +194,7 @@ mod tests {
         let src = [1,2,3,4,5];
         let target = [6,7,8,9,10];
         let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![Op::Add(Add{bytes: target.to_vec()})]);
+        assert_eq!(ops, vec![Op::Add(Add{bytes: &target})]);
     }
 
     #[test]
@@ -203,11 +218,11 @@ mod tests {
         let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
         let ops = encode_window(&src, 0,&target,0,2);
         assert_eq!(ops, vec![
-            Op::Add(Add{bytes: vec![1,2,3,4,5,6]}), //4
-            Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 5 }), //2
-            Op::Run(Run{len: 2, byte: 6}), //2
+            Op::Add(Add{bytes: &target[0..6]}), //4
+            Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }), //2
+            Op::Run(Run{len: 1, byte: 6}), //2
             Op::Copy(Copy { src: CopySrc::Output, addr: 1, len: 4 }), //2
-            Op::Add(Add{bytes: vec![7]}), // 2
+            Op::Run(Run{len: 1, byte: 7}), //2
         ]);
     }
     #[test]
@@ -217,11 +232,11 @@ mod tests {
         let ops = encode_window(&src, 0,&target,0,2);
         assert_eq!(ops, vec![
             Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 3}), //2
-            Op::Add(Add{bytes: vec![4,5,6]}), //4
-            Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 5 }), //2
-            Op::Run(Run{len: 2, byte: 6}), //2
+            Op::Add(Add{bytes: &target[3..6]}), //4
+            Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }), //2
+            Op::Run(Run{len: 1, byte: 6}), //2
             Op::Copy(Copy { src: CopySrc::Output, addr: 1, len: 4 }), //2
-            Op::Add(Add{bytes: vec![7]}), // 2
+            Op::Run(Run{len: 1, byte: 7}), //2
         ]);
     }
     #[test]
@@ -231,10 +246,10 @@ mod tests {
         let ops = encode_window(&src, 0,&target,0,2);
         assert_eq!(ops, vec![
             Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 6}), //2
-            Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 5 }), //2
-            Op::Run(Run{len: 2, byte: 6}), //2
+            Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 6 }), //2
+            Op::Run(Run{len: 1, byte: 6}), //2
             Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 4 }), //2
-            Op::Add(Add{bytes: vec![7]}), // 2
+            Op::Run(Run{len: 1, byte: 7}), //2
         ]);
     }
 

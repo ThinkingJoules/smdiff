@@ -7,7 +7,9 @@ pub const ADD: u8 = 0b10000000;
 pub const RUN: u8 = 0b11000000;
 pub const SIZE_MASK: u8 = 0b00111111;
 pub const MAX_RUN_LEN:u8 = 62;
+
 pub const MAX_INST_SIZE:usize = u16::MAX as usize;
+pub const MAX_WIN_SIZE:usize = 1<<24 - 1; // 16MB
 
 #[derive(Copy,Clone,Debug, PartialEq)]
 pub enum Format {
@@ -23,15 +25,17 @@ pub struct FileHeader {
 
 #[derive(Copy,Clone,Debug, PartialEq)]
 pub struct WindowHeader {
-    pub num_operations: u16,
+    pub num_operations: u32,
+    ///Total Add bytes at end of window
+    pub num_add_bytes: u32,
+    ///Total output size of window operations
     pub output_size: u32,
 }
 
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Add{
-    pub bytes: Vec<u8>,
+pub trait AddOp{
+    fn bytes(&self) -> &[u8];
 }
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Run{
     pub byte: u8,
@@ -51,13 +55,12 @@ pub enum CopySrc{
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Op{
+pub enum Op<A>{
     Run(Run),
     Copy(Copy),
-    Add(Add),
+    Add(A),
 }
-
-impl Op {
+impl<A> Op<A> {
     pub fn bit_flag(&self) -> u8 {
         match self {
             Op::Run(_) => RUN,
@@ -71,9 +74,11 @@ impl Op {
     pub fn is_add(&self) -> bool {
         matches!(self, Op::Add(_))
     }
+}
+impl<A:AddOp> Op<A> {
     pub fn oal(&self) -> u16 {
         match &self {
-            Op::Add(add) => add.bytes.len() as u16,
+            Op::Add(add) => add.bytes().len() as u16,
             Op::Copy(copy) => copy.len,
             Op::Run(run) => run.len as u16,
         }

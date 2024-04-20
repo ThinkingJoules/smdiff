@@ -38,7 +38,9 @@ pub fn find_byte_runs(buffer: &[u8],min_len:usize) -> Vec<(usize, u8, u8)> {
     result
 }
 
-
+pub fn run_end_pos(tuple: Option<&(usize, u8, u8)>,max_end_pos:usize) -> usize {
+    tuple.map_or(max_end_pos, |(start, len, _)| start + *len as usize)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

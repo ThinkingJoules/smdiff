@@ -53,9 +53,9 @@ pub fn unwrap_search_result(result:&SearchResult,len:usize,abs_offset:u64)->(u64
         Err((pos,found_len)) => (pos as u64 + abs_offset,found_len as u16),
     }
 }
-pub fn valid_target(trgt_match: (u64,u16),cur_o_pos: u64) -> bool {
-    (trgt_match.0 + trgt_match.1 as u64) <= cur_o_pos
-}
+// pub fn valid_target(trgt_match: (u64,u16),cur_o_pos: u64) -> bool {
+//     (trgt_match.0 + trgt_match.1 as u64) <= cur_o_pos
+// }
 ///In a tie, returns false, as src is preferred.
 pub fn use_trgt_result(
     src: Option<(u64,u16)>,
@@ -78,17 +78,17 @@ pub fn use_copy_op(last_addr: u64, next_addr:u64, len: u16) -> bool {
     calc_addr_cost(last_addr, next_addr) + 1 <= len as u8
 }
 
-///Returns None if an Add instruction is better.
-pub fn make_copy(start_len:(u64,u16),src:CopySrc,last_addr:&mut u64)->Option<Copy>{
-    let (pos,len) = start_len;
-    if !use_copy_op(*last_addr, pos, len){return None;}
-    *last_addr = pos;
-    Some(Copy{
-        src,
-        addr: pos,
-        len,
-    })
-}
+// ///Returns None if an Add instruction is better.
+// pub fn make_copy(start_len:(u64,u16),src:CopySrc,last_addr:&mut u64,next_run_start:usize)->Option<Copy>{
+//     let (pos,len) = start_len;
+//     if !use_copy_op(*last_addr, pos, len){return None;}
+//     *last_addr = pos;
+//     Some(Copy{
+//         src,
+//         addr: pos,
+//         len,
+//     })
+// }
 
 pub fn calc_addr_cost(last_addr: u64, next_addr: u64) -> u8 {
     let new_value = diff_addresses_to_i64(last_addr, next_addr);

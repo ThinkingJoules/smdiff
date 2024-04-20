@@ -1,9 +1,19 @@
-use smdiff_common::{diff_addresses_to_u64, read_i_varint, read_u16, read_u8, read_u_varint, size_routine, Add, Copy, CopySrc, FileHeader, Format, Op, Run, Size, WindowHeader, ADD, COPY_D, COPY_O, RUN, SIZE_MASK};
+use smdiff_common::{diff_addresses_to_u64, read_i_varint, read_u16, read_u8, read_u_varint, size_routine, Copy, CopySrc, FileHeader, Format, AddOp, Run, Size, WindowHeader, ADD, COPY_D, COPY_O, RUN, SIZE_MASK};
 
 
 
+pub type Op = smdiff_common::Op<Add>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Add{
+    pub bytes: Vec<u8>,
+}
 
+impl AddOp for Add{
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
 
 pub fn decode_file_header(header_byte: u8) -> FileHeader {
     let compression_algo = header_byte & 0b11000000;
@@ -25,10 +35,19 @@ pub fn decode_file_header(header_byte: u8) -> FileHeader {
 
 pub fn read_window_header<R: std::io::Read>(reader: &mut R) -> std::io::Result<WindowHeader> {
     let num_operations = read_u_varint(reader)?;
-    let output_size = read_u_varint(reader)?;
+    let num_add_bytes = read_u_varint(reader)?;
+    let diff_encoded_output_size = read_u_varint(reader)?;
+    let output_size = num_add_bytes + diff_encoded_output_size;
+    //return err if output size is great MAX_WIN_SIZE
+    if output_size > smdiff_common::MAX_WIN_SIZE as u64 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Output size is greater than MAX_WIN_SIZE"));
+    }
+
+
     Ok(WindowHeader {
-        num_operations: num_operations as u16,
+        num_operations: num_operations as u32,
         output_size: output_size as u32,
+        num_add_bytes: num_add_bytes as u32,
     })
 }
 
@@ -39,11 +58,23 @@ pub fn read_section<R: std::io::Read>(reader: &mut R) -> std::io::Result<(Vec<Op
     dbg!(&header);
     match header.format {
         Format::WindowFormat => {
-            let WindowHeader { num_operations, output_size } = read_window_header(reader)?;
+            let WindowHeader { num_operations, num_add_bytes,output_size } = read_window_header(reader)?;
             let mut output = Vec::with_capacity(num_operations as usize);
-            for _ in 0..num_operations {
-                let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr)?;
+            let mut add_idxs = Vec::new();
+            for i in 0..num_operations {
+                let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr,false)?;
+                if op.is_add(){
+                    add_idxs.push(i as usize);
+                }
                 output.push(op);
+            }
+            //reader should be at the end of the instructions
+            //now we go back and fill the add op buffers
+            for i in add_idxs{
+                let op = output.get_mut(i).unwrap();
+                if let Op::Add(add) = op{
+                    reader.read_exact(&mut add.bytes)?;
+                }
             }
             Ok((output, Some(output_size)))
         },
@@ -51,7 +82,7 @@ pub fn read_section<R: std::io::Read>(reader: &mut R) -> std::io::Result<(Vec<Op
             let mut output = Vec::with_capacity(num_operations as usize);
             let mut out_size = 0;
             for _ in 0..num_operations {
-                let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr)?;
+                let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr,true)?;
                 out_size += op.oal() as u32;
                 output.push(op);
             }
@@ -85,8 +116,7 @@ fn read_op_byte<R: std::io::Read>(reader: &mut R) -> std::io::Result<OpByte> {
         _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid op type")),
     }
 }
-
-fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut u64) -> std::io::Result<Op> {
+fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut u64,is_micro_fmt:bool) -> std::io::Result<Op> {
     let OpByte { op, size } = read_op_byte(reader)?;
     if matches!(op, OpType::Run) && !matches!(size, Size::Done(_)) {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid size for RUN operation"));
@@ -113,7 +143,9 @@ fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut 
         },
         OpType::Add => {
             let mut bytes = vec![0u8;size as usize];
-            reader.read_exact(&mut bytes)?;
+            if is_micro_fmt{
+                reader.read_exact(&mut bytes)?;
+            }
             Op::Add(Add{bytes})
         },
         OpType::Run => {
@@ -123,6 +155,7 @@ fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut 
     *cur_o_addr += op.oal() as u64;
     Ok(op)
 }
+
 
 #[cfg(test)] // Include this section only for testing
 mod tests {

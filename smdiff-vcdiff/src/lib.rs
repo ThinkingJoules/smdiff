@@ -1,12 +1,23 @@
 use std::io::Seek;
 
-use smdiff_common::{Add, Copy, CopySrc, Op, Run, MAX_RUN_LEN};
-use smdiff_writer::write_section;
+use smdiff_common::{AddOp, Copy, CopySrc, Run, MAX_RUN_LEN};
+use smdiff_writer::write_micro_section;
 use vcdiff_common::{CopyType, Inst, Instruction, WinIndicator, ADD, RUN};
 use vcdiff_reader::{VCDReader, VCDiffReadMsg};
 
 const MAX_INST_SIZE: u32 = u16::MAX as u32;
+pub type Op = smdiff_common::Op<Add>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Add{
+    pub bytes: Vec<u8>,
+}
+
+impl AddOp for Add{
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
 
 pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader: R, mut writer: W) -> std::io::Result<()> {
     let mut cur_win = Vec::new();
@@ -118,6 +129,6 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
     }
     //now we determine what we need to write
     dbg!(input_inst,cur_win.len());
-    write_section(cur_win,Some(cur_o_pos as u32),&mut writer)?;
+    write_micro_section(cur_win,&mut writer)?;
     Ok(())
 }
