@@ -141,7 +141,6 @@ impl SuffixArray {
 
 
         let end = self.prefix_map.range((Bound::Excluded(start_key),Bound::Unbounded)).next().map(|a|*a.1).unwrap_or(self.suffixes.len());
-
         let mut best_len = 0;
         let mut best_pos = 0;
         let max_len = sa_src.len();
@@ -175,7 +174,11 @@ impl SuffixArray {
             }
             attempt += 1;
         }
-        return Some(Err((best_pos,best_len)));
+        if best_len >= Self::MIN_MATCH_BYTES {
+            return Some(Err((best_pos,best_len)));
+        }else{
+            return None;
+        }
     }
 
     ///Return Ok(start_pos) if the slice is found Or
@@ -202,29 +205,33 @@ impl SuffixArray {
         //this restriction is for the trgt file, src doesn't have this.
         //something to work on.
         for &i in self.suffixes[start..end].iter().rev() {
+            //dbg!(i,max_end_len,&sa_src[i..]);
             if i >= max_end_len {
                 continue;
             }
-            let test_len = std::cmp::min(find_len, max_len - i);
+            let test_len = *[find_len, max_len - i, max_end_len - i].iter().min().unwrap();
             let suffix_end_pos = i + test_len;
             let suffix = &sa_src[i..suffix_end_pos];
             //We assume most will not be exact matches, so we check equality using this zip method.
             let common_prefix_len = find.iter().zip(suffix).take_while(|(a, b)| a == b).count();
             //We want the suffix closes to the start of the file, but also the longest.
             //this is really for trgt file matches, since we cannot use a match that hasn't occured yet.
-            let valid_prefix_len = if suffix_end_pos < max_end_len {
-                common_prefix_len
-            } else{
-                common_prefix_len - (suffix_end_pos - max_end_len)
-            };
-            if valid_prefix_len >= best_len {
-                best_len = valid_prefix_len;
+
+            // let valid_prefix_len = if i + common_prefix_len < max_end_len {
+            //     common_prefix_len
+            // } else{
+            //     common_prefix_len - (suffix_end_pos - max_end_len)
+            // };
+            //dbg!(common_prefix_len,best_len,test_len,suffix,find,suffix_end_pos,max_end_len);
+            if common_prefix_len >= best_len {
+                best_len = common_prefix_len;
                 best_pos = i;
             }
             if best_len == find_len {
                 return Some(Ok(i)); // full match found
             }
         }
+        dbg!(best_pos,best_len);
         if best_len >= Self::MIN_MATCH_BYTES {
             return Some(Err((best_pos,best_len)));
         }else{
