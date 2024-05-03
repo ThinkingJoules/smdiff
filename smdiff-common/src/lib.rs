@@ -6,21 +6,42 @@ pub const COPY_O: u8 = 0b01000000;
 pub const ADD: u8 = 0b10000000;
 pub const RUN: u8 = 0b11000000;
 pub const SIZE_MASK: u8 = 0b00111111;
+///Inclusive Upper Bound
 pub const MAX_RUN_LEN:u8 = 62;
-
+///Inclusive Upper Bound
 pub const MAX_INST_SIZE:usize = u16::MAX as usize;
-pub const MAX_WIN_SIZE:usize = 1<<24 - 1; // 16MB
-
+///Inclusive Upper Bound
+pub const MAX_WIN_SIZE:usize = (1<<24) - 1; // 16MB
+///Inclusive Upper Bound
+pub const MICRO_MAX_INST_COUNT:usize = 31;
 #[derive(Copy,Clone,Debug, PartialEq)]
 pub enum Format {
     MicroFormat{num_operations: u8},
     WindowFormat,
 }
 
+impl Format {
+    pub fn is_micro(&self) -> bool {
+        matches!(self, Format::MicroFormat{..})
+    }
+    pub fn is_window(&self) -> bool {
+        matches!(self, Format::WindowFormat)
+    }
+}
+
 #[derive(Copy,Clone,Debug, PartialEq)]
 pub struct FileHeader {
     pub compression_algo: u8,
     pub format: Format,
+}
+
+impl FileHeader {
+    pub fn is_compressed(&self) -> bool {
+        self.compression_algo != 0
+    }
+    pub fn is_micro(&self) -> bool {
+        self.format.is_micro()
+    }
 }
 
 #[derive(Copy,Clone,Debug, PartialEq)]
@@ -74,6 +95,12 @@ impl<A> Op<A> {
     pub fn is_add(&self) -> bool {
         matches!(self, Op::Add(_))
     }
+    pub fn is_run(&self) -> bool {
+        matches!(self, Op::Run(_))
+    }
+    pub fn is_copy(&self) -> bool {
+        matches!(self, Op::Copy(_))
+    }
 }
 impl<A:AddOp> Op<A> {
     pub fn oal(&self) -> u16 {
@@ -85,15 +112,27 @@ impl<A:AddOp> Op<A> {
     }
 }
 
+
 /// Used to determine how the size should be handled
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Size{
     Done(u8),
     U8And62,
     U16
 }
+
+impl Size {
+    pub fn size_overhead(&self) -> usize {
+        match self {
+            Size::Done(_) => 0,
+            Size::U8And62 => 1,
+            Size::U16 => 2,
+        }
+    }
+}
 pub fn size_routine(size: u16)->Size{
     match size {
-        0..=62 => Size::Done(size as u8),
+        1..=62 => Size::Done(size as u8),
         63 => Size::U8And62,
         _ => Size::U16,
     }
@@ -203,6 +242,24 @@ mod tests {
         for &val in &values {
             buffer.clear();
             write_i_varint(&mut buffer, val).unwrap();
+            let mut cursor = Cursor::new(&buffer);
+            let decoded = read_i_varint(&mut cursor).unwrap();
+            assert_eq!(val, decoded, "Failed encoding/decoding {}", val);
+        }
+    }
+    #[test]
+    fn test_ivarint_vals() {
+        let mut buffer = Vec::new();
+        let values = [
+            -64,63, // min 3 byte match
+            -8192,8191, //min 4 byte match
+            -1048576,1048575, //min 5 byte match
+            -134217728,134217727, //min 6 byte match
+        ];
+        for &val in &values {
+            buffer.clear();
+            write_i_varint(&mut buffer, val).unwrap();
+            println!("i64: {} buffer:{:?}",val,buffer);
             let mut cursor = Cursor::new(&buffer);
             let decoded = read_i_varint(&mut cursor).unwrap();
             assert_eq!(val, decoded, "Failed encoding/decoding {}", val);
