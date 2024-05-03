@@ -1,265 +1,359 @@
 
 /*
-Approach to generating delta operations.
-This encoder requires the encoded portion of a choses src and target slice to be in memory.
-This will generate a Suffix Array for each to allow for matching prefixes.
-This requires a fair amount of memory:
-    Src: 8 * src.len()
-    Trgt: 16 * trgt.len()
-    In theory trgt has a max len of 2^24, so 16MB. This is the max window size per the spec.
-    Src has a max len of 2^32. This is an implementation limit for this encoder.
+There are two parts to delta encoding a large file:
+ - The pre-selection of 'dictionary' data
+ - Finding matches to generate Copy, otherwise emitting Add and Run operations
 
-    Trgt requires extra memory for an index so we know which suffixes to consider for a given encoding start position.
+The latter part is basically identical for the micro encoder.
+The former, is not needed for micro, as we consider the entire Src file as the dictionary.
 
-Approach:
-- First find all the Runs in our Target File. This might not be optimal, as it can break up a copy instruction.
-    - To ensure it is not terrible, a minimum value should be set based on expected address overhead for copy.
-    - If a file is small then breaking up a copy is only a couple bytes of overhead.
-    - A value of 2 or 3 should be fine. Large files might benefit from a larger value. Max is 62, per the spec.
-
-Then we begin our main loop. The operation precedence is:
-    - Run
-    - Copy
-    - Add
-
-We peek at our first run index,
-we also find the first min_match in either file (this will only be src, since we haven't emitted any ops yet).
-Each loop iteration:
-    If our current output byte is a start of a run, we emit the run and continue. (highest precedence)
-    else if our next min_match is at the current output position we emit a copy. (next highest precedence)
-    else we emit an add instruction up to the next min_match position. (lowest precedence)
-
-There are other things we do, such as check if a copy is better than an add, and if we should use the src or target match.
-This is trying to optimize for the smallest encoded delta size.
+This module has to do with the pre-selection of dictionary data.
+It will also use a modified encoder that is faster and less fine-grained than the micro encoder.
 */
 
-use smdiff_common::{Copy,CopySrc, Run, MAX_INST_SIZE, MAX_WIN_SIZE};
+use std::ops::Range;
 
-use crate::{copy::{get_correct_check_len, scan_for_next_match, unwrap_search_result, use_copy_op, use_trgt_result, NextMinMatch}, run::{find_byte_runs, run_end_pos}, suffix::SuffixArray, Add, Op, MIN_ADD_LEN};
-pub fn encode_window<'a>(src: &[u8],src_abs_start_pos:u64, target: &'a [u8],target_abs_start_pos:u64,min_run_len:usize) -> Vec<Op<'a>>{
-    assert!(target.len() <= MAX_WIN_SIZE);
+use smdiff_common::{Copy, CopySrc, Run, WindowHeader, MAX_WIN_SIZE};
+
+use crate::{add::{make_add_runs, make_adds}, hash::{find_sub_string_in_src, find_sub_string_in_trgt, find_substring_in_src, find_substring_in_trgt, ChunkHashMap, HashCursor, MULTIPLICATVE}, run::handle_run, CopyScore, Op};
+
+//Use with full src or trgt dict only
+pub fn encode_window<'a>(src_dict: &[ChunkHashMap], trgt_dict: &[ChunkHashMap], src_bytes:&[u8], target: &'a [u8], window_range:Range<usize>,hash_size:usize) -> (WindowHeader,Vec<Op<'a>>){
     if target.is_empty(){
-        return Vec::new();
+        return (WindowHeader{ num_operations: 0, num_add_bytes: 0, output_size: 0 },Vec::new());
     }
-    //We assume that if we can fit the src and trgt in memory, the rest of our overhead is minimal
-    //first we find all the runs in the target file.
-    let mut trgt_runs = find_byte_runs(target,min_run_len);
-    // we gen the prefix trie from the target
-    let trgt_sa = SuffixArray::new(target);
-
-    let src_sa = SuffixArray::new(src);
-    dbg!(&src_sa, &trgt_sa);
-    //now we start at the beginning of the target file and start encoding.
+    let win_size = window_range.end - window_range.start;
+    assert!(win_size <= MAX_WIN_SIZE);
     let mut rel_o = 0;
-    let max_end_pos = target.len();
+    let mut run_pos = 0;
+    let mut copy_pos = 0;
+    let mut add_bytes = 0;
+    let max_end_pos = window_range.end-window_range.start;
+    let chunk = &target[window_range];
     let mut last_d_addr = 0; //zeroed for each window
     let mut last_o_addr = 0;
-    trgt_runs.reverse(); //last should be the first run we would encounter.
-    let mut next_run_start = trgt_runs.last().map(|(start,_,_)| *start).unwrap_or(target.len());
-    let mut ops = Vec::new();
-    let mut next_min_match = scan_for_next_match(&target, &trgt_sa,&src,&src_sa,0);
+    let mut ops: Vec<Op> = Vec::new();
+    let mut trgt_hashes = HashCursor::new(chunk, hash_size as u32, MULTIPLICATVE);
+
+    // let mut miss_avg = AverageDuration::new();
+    // let mut hit_avg = AverageDuration::new();
+    // let mut run_avg = AverageDuration::new();
     loop{
-        dbg!(rel_o, next_run_start, &next_min_match);
-        if rel_o >= target.len() {
+        // if run_pos < 500  {
+        //     dbg!(ops.last());
+        //     println!("rel_o {} run_pos {} copy_pos {} last_d {} %: {}",rel_o,run_pos,copy_pos, last_d_addr,run_pos as f32/win_size as f32);
+        // }else{
+        //     dbg!(ops.last());
+        //     println!("rel_o {} run_pos {} copy_pos {} last_d {} %: {}",rel_o,run_pos,copy_pos, last_d_addr,run_pos as f32/win_size as f32);
+        //     panic!()
+        // }
+
+        //let start_loop = std::time::Instant::now();
+        if run_pos.max(copy_pos) >= max_end_pos {
             break;
         }
-        //last loop may have a copy that has made our Run(s) stale.
-        if run_end_pos(trgt_runs.last(), max_end_pos) < rel_o{
-            while  run_end_pos(trgt_runs.last(), max_end_pos) < rel_o{
-                trgt_runs.pop();
-            }
-            next_run_start = trgt_runs.last().map(|(start,_,_)| *start).unwrap_or(target.len());
+        if copy_pos+hash_size as usize >= max_end_pos{
+            //we need to emit the last add op
+            //copy_pos = max_end_pos;
+            break;
         }
-
-        //might be less than if a copy took some of our first bytes
-        if next_run_start <= rel_o {
-            //we are at a run, we need emit this op
-            let (_,mut len,byte) = trgt_runs.pop().unwrap();
-            len -= (rel_o - next_run_start) as u8; //should never underflow
-            rel_o += len as usize;
-            ops.push(Op::Run(Run{len,byte}));
-            next_run_start = trgt_runs.last().map(|(start,_,_)| *start).unwrap_or(target.len());
-            //out next_min_match might be 'behind' since our run was applied
-            //run always gets precedence as it is the smallest possible op.
-            if next_min_match.is_some() && next_min_match.as_ref().unwrap().next_o_pos < rel_o{
-                next_min_match = scan_for_next_match(&target, &trgt_sa,&src,&src_sa,  rel_o);
+        if let Some((byte,mut len)) = handle_run(&chunk[run_pos..]){
+            assert!(run_pos <= copy_pos);
+            if run_pos > rel_o{//emit non-run, non-matched bytes
+                make_adds(&chunk[rel_o..run_pos], &mut ops,&mut add_bytes);
+                //dbg!(add_bytes);
+                assert!(add_bytes<=win_size);
+                rel_o = run_pos;
             }
+            assert_eq!(run_pos,rel_o);
+            //dbg!(byte,len);
+            //we need to chop this len up to max 62 len long per op
+            while len > 62 {
+                ops.push(Op::Run(Run{byte, len: 62}));
+                rel_o += 62;
+                len -= 62;
+            }
+            ops.push(Op::Run(Run{byte, len: len as u8}));
+            rel_o += len;
+            run_pos = rel_o;
+            copy_pos = copy_pos.max(rel_o); //our run might have ran in to our next copy start
+            //run_avg.add_sample(start_loop.elapsed());
             continue;
         }
-
-        //next_min_match should be at or ahead of cur_o_pos
-        //if it is at cur_o_pos we should emit the copy and update the next_min_match.
-        //if we are not yet to it, we should emit an add so the next iteration will emit the copy.
-
-        if next_min_match.is_some() && next_min_match.as_ref().unwrap().next_o_pos == rel_o{
-            //this might not be cheaper than add, so we must check first.
-            //if an add is cheaper, we should set find the next_min_match for the next iteration.
-            let NextMinMatch{ src_found, trgt_found, .. } = next_min_match.unwrap();
-            dbg!(src_found, trgt_found);
-            let check_len = get_correct_check_len(rel_o, next_run_start, max_end_pos);
-            let end_pos = rel_o + check_len;
-            let next_slice = &target[rel_o..end_pos];
-            let src_match = if src_found {
-                let found = src_sa.search(src,next_slice);
-                Some(unwrap_search_result(&found, check_len,src_abs_start_pos))
-            }else{
-                None
-            };
-            let trgt_match = if trgt_found {
-                let found = trgt_sa.search_restricted(target,next_slice,rel_o);
-                Some(unwrap_search_result(&found, check_len,target_abs_start_pos))
-            }else{
-                None
-            };
-            let use_trgt = trgt_match.is_some() && use_trgt_result(src_match, trgt_match.unwrap(), last_d_addr, last_o_addr);
-            let ((match_start,match_len),c_src, last_addr) = if use_trgt{
-                (trgt_match.unwrap(), CopySrc::Output,&mut last_o_addr)
-            }else{
-                (src_match.unwrap(), CopySrc::Dict,&mut last_d_addr)
-            };
-
-            //Is copy better than add?
-            if use_copy_op(*last_addr, match_start, match_len){
-                //This copy might include or 'eat into' Run(s)
-                //This is fine, we want Copys to be as long as possible.
-                //we can emit a copy
-                rel_o += match_len as usize;
-                *last_addr = match_start;
-                ops.push(Op::Copy(Copy{src: c_src, addr: match_start, len: match_len}));
-                next_min_match = scan_for_next_match(&target, &trgt_sa,&src,&src_sa,  rel_o);
-                continue;
-            }else{// fall through to the add op
-                //we need to find the next next_min_match starting at the next_o_pos
-                // the cur_o_pos + N: N is the min add inst length.
-                //this will be read immediately below.
-                next_min_match = scan_for_next_match(&target, &trgt_sa,&src,&src_sa,  rel_o + MIN_ADD_LEN);
-            }
+        if run_pos < copy_pos {//try another run before we get to our next copy
+            run_pos += 1;
+            continue;
         }
-        //if we are here we are going to emit an add, no checking.
-        //If there is not a next_min_match, we are done.
-        //otherwise, emit an add up to the start of the next_min_match position.
-        match next_min_match.as_ref() {
-            Some(NextMinMatch{next_o_pos, ..}) => {
-                let min = next_o_pos.min(&next_run_start);
-                //next op is either Run or Copy, we need to fill the space between.
-                fit_adds(&target[rel_o..*min], &mut ops);
-                rel_o = *min;
+        //if we are here run_pos == copy_pos
+        assert_eq!(run_pos,copy_pos);
+        let cur_hash = trgt_hashes.seek(copy_pos).unwrap();
+        let src_match = find_sub_string_in_src(&src_bytes,&src_dict, chunk,cur_hash, hash_size as usize, copy_pos,last_d_addr);
+        let trgt_match = find_sub_string_in_trgt(&trgt_dict, chunk, cur_hash, hash_size as usize, copy_pos,last_o_addr);
+        if src_match.is_some() || trgt_match.is_some() {
+            assert!(run_pos>=rel_o);
+            assert_eq!(run_pos,copy_pos);
+            if copy_pos > rel_o{
+                make_adds(&chunk[rel_o..copy_pos], &mut ops,&mut add_bytes);
+                //dbg!(add_bytes);
+                assert!(add_bytes<=win_size);
+                rel_o = copy_pos;
             }
-            None => {
-                let min = max_end_pos.min(next_run_start);
-                fit_adds(&target[rel_o..min], &mut ops);
-                rel_o = min;
-                next_min_match = scan_for_next_match(&target, &trgt_sa,&src,&src_sa,  rel_o);
-
+            let use_trgt = trgt_match > src_match;
+            if use_trgt{
+                let CopyScore { size, start,.. } = trgt_match.unwrap();
+                let start = start as u64;
+                let len = size as u16;
+                rel_o += size;
+                copy_pos = rel_o;
+                run_pos = rel_o;
+                last_o_addr = start;
+                //println!("Using Trgt match, len: {} start: {}",size,start);
+                ops.push(Op::Copy(Copy{src: CopySrc::Output, addr: last_o_addr, len}));
+                //let dur = start_loop.elapsed();
+                //hit_avg.add_sample(dur);
+            }else{
+                let CopyScore { size, start,.. }= src_match.unwrap();
+                let start = start as u64;
+                let len = size as u16;
+                rel_o += size;
+                copy_pos = rel_o;
+                run_pos = rel_o;
+                last_d_addr = start;
+                //println!("Using Src match, len: {} start: {}",size,start);
+                ops.push(Op::Copy(Copy{src: CopySrc::Dict, addr: last_d_addr, len}));
+                //let dur = start_loop.elapsed();
+                //hit_avg.add_sample(dur);
             }
+            continue;
+        }else{
+            //let dur = start_loop.elapsed();
+            //miss_avg.add_sample(dur);
+            copy_pos += hash_size as usize;
         }
     }
+    if rel_o < max_end_pos{
+        //we need to emit the last add op
+        make_add_runs(&chunk[rel_o..], &mut ops,&mut add_bytes);
+        assert!(add_bytes<=win_size, "Add bytes: {} Win Size: {} rel_o",add_bytes,win_size);
+        rel_o = max_end_pos;
+    }
 
-    ops
+    let header = WindowHeader{
+        num_operations: ops.len() as u32,
+        output_size: rel_o as u32,
+        num_add_bytes: add_bytes as u32,
+    };
+    (header,ops)
 }
 
-fn fit_adds<'a>(bytes: &'a [u8],output: &mut Vec<Op<'a>>){
-    let mut remaining = bytes.len();
-    if remaining == 1{//emit a run of len 1
-        output.push(Op::Run(Run{len: 1, byte: bytes[0]}));
-        return;
+//WIP Doesn't encode properly yet.
+pub fn encode_window_min<'a>(src_dict: &ChunkHashMap, trgt_dict: &ChunkHashMap, src_bytes:&[u8], target: &'a [u8], window_range:Range<usize>,hash_size:usize) -> (WindowHeader,Vec<Op<'a>>){
+    if target.is_empty(){
+        return (WindowHeader{ num_operations: 0, num_add_bytes: 0, output_size: 0 },Vec::new());
     }
-    let mut processed = 0;
+    let win_size = window_range.end - window_range.start;
+    assert!(win_size <= MAX_WIN_SIZE);
+    let mut rel_o = 0;
+    let mut run_pos = 0;
+    let mut copy_pos = 0;
+    let mut add_bytes = 0;
+    let max_end_pos = window_range.end-window_range.start;
+    let chunk = &target[window_range];
+    let mut last_d_addr = 0; //zeroed for each window
+    let mut last_o_addr = 0;
+    let mut ops: Vec<Op> = Vec::new();
+    let mut trgt_hashes = HashCursor::new(chunk, hash_size as u32, MULTIPLICATVE);
+
+    // let mut miss_avg = AverageDuration::new();
+    // let mut hit_avg = AverageDuration::new();
+    // let mut run_avg = AverageDuration::new();
     loop{
-        let chunk_size = remaining.min(MAX_INST_SIZE as usize);
-        let op = Add{bytes: &bytes[processed..processed+chunk_size]};
-        remaining -= chunk_size;
-        processed += chunk_size;
-        output.push(Op::Add(op));
-        if remaining == 0{
+        // if chunk_num == 0 && run_pos < 500  {
+        //     dbg!(ops.last());
+        //     println!("rel_o {} run_pos {} copy_pos {} last_d {} %: {}",rel_o,run_pos,copy_pos, last_d_addr,run_pos as f32/win_size as f32);
+        // }else{panic!()}
+
+        //let start_loop = std::time::Instant::now();
+        if run_pos.max(copy_pos) >= max_end_pos {
             break;
         }
+        if copy_pos+hash_size as usize >= max_end_pos{
+            //we need to emit the last add op
+            //copy_pos = max_end_pos;
+            break;
+        }
+        if let Some((byte,mut len)) = handle_run(&chunk[run_pos..]){
+            assert!(run_pos <= copy_pos);
+            if run_pos > rel_o{//emit non-run, non-matched bytes
+                make_adds(&chunk[rel_o..run_pos], &mut ops,&mut add_bytes);
+                //dbg!(add_bytes);
+                assert!(add_bytes<=win_size);
+                rel_o = run_pos;
+            }
+            assert_eq!(run_pos,rel_o);
+            //dbg!(byte,len);
+            //we need to chop this len up to max 62 len long per op
+            while len > 62 {
+                ops.push(Op::Run(Run{byte, len: 62}));
+                rel_o += 62;
+                len -= 62;
+            }
+            ops.push(Op::Run(Run{byte, len: len as u8}));
+            rel_o += len;
+            run_pos = rel_o;
+            copy_pos = copy_pos.max(rel_o); //our run might have ran in to our next copy start
+            //run_avg.add_sample(start_loop.elapsed());
+            continue;
+        }
+        if run_pos < copy_pos {//try another run before we get to our next copy
+            run_pos += 1;
+            continue;
+        }
+        //if we are here run_pos == copy_pos
+        assert_eq!(run_pos,copy_pos);
+        let cur_hash = trgt_hashes.seek(copy_pos).unwrap();
+        let src_match = find_substring_in_src(&src_bytes,&src_dict, &chunk,cur_hash, hash_size as usize, copy_pos,last_d_addr);
+        let trgt_match = find_substring_in_trgt(&trgt_dict, &target, cur_hash, hash_size as usize, copy_pos,last_o_addr);
+        if src_match.is_some() || trgt_match.is_some() {
+            assert!(run_pos>=rel_o);
+            assert_eq!(run_pos,copy_pos);
+            if copy_pos > rel_o{
+                make_adds(&chunk[rel_o..copy_pos], &mut ops,&mut add_bytes);
+                //dbg!(add_bytes);
+                assert!(add_bytes<=win_size);
+                rel_o = copy_pos;
+            }
+            let use_trgt = trgt_match > src_match;
+            if use_trgt{
+                let CopyScore { size, start,.. } = trgt_match.unwrap();
+                let start = start as u64;
+                let len = size as u16;
+                rel_o += size;
+                copy_pos = rel_o;
+                run_pos = rel_o;
+                last_o_addr = start;
+                //println!("Using Trgt match, len: {} start: {}",size,start);
+                ops.push(Op::Copy(Copy{src: CopySrc::Output, addr: last_o_addr, len}));
+                //let dur = start_loop.elapsed();
+                //hit_avg.add_sample(dur);
+            }else{
+                let CopyScore { size, start,.. }= src_match.unwrap();
+                let start = start as u64;
+                let len = size as u16;
+                rel_o += size;
+                copy_pos = rel_o;
+                run_pos = rel_o;
+                last_d_addr = start;
+                //println!("Using Src match, len: {} start: {}",size,start);
+                ops.push(Op::Copy(Copy{src: CopySrc::Dict, addr: last_d_addr, len}));
+                //let dur = start_loop.elapsed();
+                //hit_avg.add_sample(dur);
+            }
+            continue;
+        }else{
+            //let dur = start_loop.elapsed();
+            //miss_avg.add_sample(dur);
+            copy_pos += hash_size as usize;
+        }
     }
+    if rel_o < max_end_pos{
+        //we need to emit the last add op
+        make_add_runs(&chunk[rel_o..], &mut ops,&mut add_bytes);
+        assert!(add_bytes<=win_size, "Add bytes: {} Win Size: {} rel_o",add_bytes,win_size);
+        rel_o = max_end_pos;
+    }
+
+    let header = WindowHeader{
+        num_operations: ops.len() as u32,
+        output_size: rel_o as u32,
+        num_add_bytes: add_bytes as u32,
+    };
+    (header,ops)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use smdiff_common::Copy;
-    #[test]
-    fn test_empty_files(){
-        let src = [];
-        let target = [];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, Vec::<Op>::new());
-    }
 
-    #[test]
-    fn test_no_common(){
-        let src = [1,2,3,4,5];
-        let target = [6,7,8,9,10];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![Op::Add(Add{bytes: &target})]);
-    }
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     // #[test]
+//     // fn test_empty_files(){
+//     //     let src = Dictionary::new(&[]);
+//     //     let target = [];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, Vec::<Op>::new());
+//     // }
 
-    #[test]
-    fn test_run(){
-        let src = [1,2,3,4,5];
-        let target = [1,1,1,1,1];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![Op::Run(Run{len: 5, byte: 1})]);
-    }
+//     // #[test]
+//     // fn test_no_common(){
+//     //     let src = Dictionary::new(&[1,2,3,4,5]);
+//     //     let target = [6,7,8,9,10];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, vec![Op::Add(Add{bytes: &target})]);
+//     // }
 
-    #[test]
-    fn test_run_copy(){
-        let src = [1,2,3,4,5];
-        let target = [1,1,1,1,1,2,3,4,5];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![Op::Run(Run{len: 5, byte: 1}), Op::Copy(Copy{src: CopySrc::Dict, addr: 1, len: 4})]);
-    }
-    #[test]
-    fn test_copy_no_src(){
-        let src = [];
-        let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![
-            Op::Add(Add{bytes: &target[0..6]}), //4
-            Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }), //2
-            Op::Run(Run{len: 1, byte: 6}), //2
-            Op::Copy(Copy { src: CopySrc::Output, addr: 1, len: 4 }), //2
-            Op::Run(Run{len: 1, byte: 7}), //2
-        ]);
-    }
-    #[test]
-    fn test_copy(){
-        let src = [1,2,3];
-        let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![
-            Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 3}), //2
-            Op::Add(Add{bytes: &target[3..6]}), //4
-            Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }), //2
-            Op::Run(Run{len: 1, byte: 6}), //2
-            Op::Copy(Copy { src: CopySrc::Output, addr: 1, len: 4 }), //2
-            Op::Run(Run{len: 1, byte: 7}), //2
-        ]);
-    }
-    #[test]
-    fn test_copy_favor_src(){
-        let src = [1,2,3,4,5,6];
-        let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![
-            Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 6}), //2
-            Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 6 }), //2
-            Op::Run(Run{len: 1, byte: 6}), //2
-            Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 4 }), //2
-            Op::Run(Run{len: 1, byte: 7}), //2
-        ]);
-    }
+//     // #[test]
+//     // fn test_run(){
+//     //     let src = Dictionary::new(&[1,2,3,4,5]);
+//     //     let target = [1,1,1,1,1];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, vec![Op::Run(Run{len: 5, byte: 1})]);
+//     // }
 
-    #[test]
-    fn test_copy_larger_src(){
-        let src = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
-        let target = [1,2,3,4,5,6];
-        let ops = encode_window(&src, 0,&target,0,2);
-        assert_eq!(ops, vec![
-            Op::Copy(Copy{src: CopySrc::Dict, addr:6, len: 6}), //2
-        ]);
-    }
-}
+//     // #[test]
+//     // fn test_run_copy(){
+//     //     let src = Dictionary::new(&[1,2,3,4,5]);
+//     //     let target = [1,1,1,1,1,2,3,4,5];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, vec![Op::Run(Run{len: 5, byte: 1}), Op::Copy(Copy{src: CopySrc::Dict, addr: 1, len: 4})]);
+//     // }
+//     // #[test]
+//     // fn test_copy_no_src(){
+//     //     let src = Dictionary::new(&[]);
+//     //     let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, vec![
+//     //         Op::Add(Add{bytes: &target[0..6]}), //4
+//     //         Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }), //2
+//     //         Op::Run(Run{len: 1, byte: 6}), //2
+//     //         Op::Copy(Copy { src: CopySrc::Output, addr: 1, len: 4 }), //2
+//     //         Op::Run(Run{len: 1, byte: 7}), //2
+//     //     ]);
+//     // }
+//     // #[test]
+//     // fn test_copy(){
+//     //     let src = Dictionary::new(&[1,2,3]);
+//     //     let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, vec![
+//     //         Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 3}), //2
+//     //         Op::Add(Add{bytes: &target[3..6]}), //4
+//     //         Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }), //2
+//     //         Op::Run(Run{len: 1, byte: 6}), //2
+//     //         Op::Copy(Copy { src: CopySrc::Output, addr: 1, len: 4 }), //2
+//     //         Op::Run(Run{len: 1, byte: 7}), //2
+//     //     ]);
+//     // }
+//     // #[test]
+//     // fn test_copy_favor_src(){
+//     //     let src = Dictionary::new(&[1,2,3,4,5,6]);
+//     //     let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, vec![
+//     //         Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 6}), //2
+//     //         Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 6 }), //2
+//     //         Op::Run(Run{len: 1, byte: 6}), //2
+//     //         Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 4 }), //2
+//     //         Op::Run(Run{len: 1, byte: 7}), //2
+//     //     ]);
+//     // }
+
+//     // #[test]
+//     // fn test_copy_larger_src(){
+//     //     let src = Dictionary::new(&[1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7]);
+//     //     let target = [1,2,3,4,5,6];
+//     //     let (_,ops) = encode_window(&src, 0,&target,0,2);
+//     //     assert_eq!(ops, vec![
+//     //         Op::Copy(Copy{src: CopySrc::Dict, addr:6, len: 6}), //2
+//     //     ]);
+//     // }
+// }

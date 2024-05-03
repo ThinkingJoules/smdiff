@@ -7,4 +7,8 @@ edition = "2021"
 
 [dependencies]
 smdiff-vcdiff ={ path = "../smdiff-vcdiff" }
+smdiff-common ={ path = "../smdiff-common" }
 smdiff-reader ={ path = "../smdiff-reader" }
+smdiff-encoder ={ path = "../smdiff-encoder" }
+smdiff-decoder ={ path = "../smdiff-decoder" }
+rand = "0.8.5"
