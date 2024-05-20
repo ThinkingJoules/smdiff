@@ -274,11 +274,13 @@ mod tests {
             -8192,8191, //min 4 byte match
             -1048576,1048575, //min 5 byte match
             -134217728,134217727, //min 6 byte match
+            -123456789
         ];
         for &val in &values {
             buffer.clear();
+            let zigged = zigzag_encode(val);
             write_i_varint(&mut buffer, val).unwrap();
-            println!("i64: {} buffer:{:?}",val,buffer);
+            println!("i64: {} buffer:{:?} zigzagged: {}",val,buffer,zigged);
             let mut cursor = Cursor::new(&buffer);
             let decoded = read_i_varint(&mut cursor).unwrap();
             assert_eq!(val, decoded, "Failed encoding/decoding {}", val);
