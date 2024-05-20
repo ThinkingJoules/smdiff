@@ -37,10 +37,14 @@ pub fn write_micro_section<W: std::io::Write,A:AddOp>(ops: &[Op<A>], writer: &mu
     }
     Ok(())
 }
+/// Writes the window header and then the ops to the writer
 pub fn write_win_section<W: std::io::Write,A:AddOp>(ops: &[Op<A>], header:WindowHeader, writer: &mut W) -> std::io::Result<()> {
     // if output size is > MAX_WIN_SIZE, return error
     if header.output_size as usize > MAX_WIN_SIZE{
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Output size is greater than MAX_WIN_SIZE"));
+    }
+    if ops.len() != header.num_operations as usize {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Number of operations does not match header"));
     }
     write_window_header(&header, writer)?;
 
