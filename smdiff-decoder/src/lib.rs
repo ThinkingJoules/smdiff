@@ -28,7 +28,7 @@ pub fn apply_patch<P:Read,R:Read+Seek,W:Write>(patch:&mut P,mut src:Option<&mut 
                 return Err(e);
             },
         };
-        dbg!(ops.len(),out_size);
+        //dbg!(ops.len(),out_size);
         cur_o.reserve_exact(out_size);
         cur_o.resize(cur_o.len() + out_size, 0);
         for op in ops {
