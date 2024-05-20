@@ -1,50 +1,18 @@
-use std::{io::{Read, Seek, Write}, ops::Range};
+use std::io::{Read, Seek, Write};
 
 use smdiff_common::{Run, WindowHeader, MAX_INST_SIZE, MAX_WIN_SIZE, MICRO_MAX_INST_COUNT};
 use smdiff_reader::{Op, SectionReader};
 
 
+///Extracted Instruction with the starting position in the output buffer.
+pub type SparseOp = (u64, Op);
 
-///Extracted Instruction with a starting position.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SparseOps{
-    pub o_pos_start:u64,
-    pub op:Op,
-}
-impl SparseOps {
-    fn o_start(&self)->u64{
-        self.o_pos_start
-    }
-}
-impl MergeOp for SparseOps{
-    fn skip(&mut self,amt:u32) {
-        self.o_pos_start += amt as u64;
-        self.op.skip(amt);
-    }
-
-    fn trunc(&mut self,amt:u32) {
-        self.op.trunc(amt);
-    }
-
-    fn src_range(&self)->Option<Range<u64>> {
-        self.op.src_range()
-    }
-    fn oal(&self)->u16 {
-        self.op.oal()
-    }
-}
 impl MergeOp for Run {
     fn skip(&mut self,amt:u32) {
         self.len -= amt as u8;
     }
     fn trunc(&mut self,amt:u32) {
         self.len -= amt as u8;
-    }
-    fn src_range(&self)->Option<Range<u64>> {
-        None
-    }
-    fn oal(&self)->u16 {
-        self.len as u16
     }
 }
 impl MergeOp for smdiff_common::Copy {
@@ -55,12 +23,6 @@ impl MergeOp for smdiff_common::Copy {
     fn trunc(&mut self,amt:u32) {
         self.len -= amt as u16;
     }
-    fn src_range(&self)->Option<Range<u64>> {
-        Some(self.addr..self.addr + self.len as u64)
-    }
-    fn oal(&self)->u16 {
-        self.len
-    }
 }
 impl MergeOp for smdiff_reader::Add {
     fn skip(&mut self,amt:u32){
@@ -68,12 +30,6 @@ impl MergeOp for smdiff_reader::Add {
     }
     fn trunc(&mut self,amt:u32){
         self.bytes.truncate(self.bytes.len() - amt as usize);
-    }
-    fn src_range(&self)->Option<Range<u64>> {
-        None
-    }
-    fn oal(&self)->u16 {
-        self.bytes.len() as u16
     }
 }
 impl MergeOp for Op{
@@ -91,53 +47,27 @@ impl MergeOp for Op{
             Op::Add(add) => add.trunc(amt),
         }
     }
-    fn src_range(&self)->Option<Range<u64>> {
-        match self {
-            Op::Run(run) => run.src_range(),
-            Op::Copy(copy) => copy.src_range(),
-            Op::Add(add) => add.src_range(),
-        }
-    }
-    fn oal(&self)->u16 {
-        match self {
-            Op::Run(run) => run.oal(),
-            Op::Copy(copy) => copy.oal(),
-            Op::Add(add) => add.oal(),
-        }
-    }
 }
 
-// pub trait PosInst:MergeInst{
-//     fn o_start(&self)->u64;
-// }
 pub trait MergeOp:Clone+Sized{
     ///Shorten the 'front' of the instruction
     fn skip(&mut self,amt:u32);
     ///Truncate off the 'back' of the instruction
     fn trunc(&mut self,amt:u32);
-    ///If this is a Copy, what is the source byte range that would contain exactly this one instruction.
-    fn src_range(&self)->Option<Range<u64>>;
-    fn oal(&self)->u16;
-    // fn split_at(mut self,first_inst_len:u32)->(Self,Self){
-    //     let mut second = self.clone();
-    //     self.trunc(self.oal() as u32 - first_inst_len);
-    //     second.skip(first_inst_len);
-    //     (self,second)
-    // }
 }
 
-///Finds the index of the instruction that controls the given output position.
+///Finds the index of the op that controls the given output position.
 /// # Arguments
-/// * `insts` - The list of instructions to search.
+/// * `ops` - The list of ops to search.
 /// * `o_pos` - The output position to find the controlling instruction for.
 /// # Returns
 /// The index of the controlling instruction, or None if no such instruction exists.
-pub fn find_controlling_inst(insts:&[SparseOps],o_pos:u64)->Option<usize>{
-    let inst = insts.binary_search_by(|probe|{
-        let end = probe.o_start() + probe.oal() as u64;
-        if (probe.o_start()..end).contains(&o_pos){
+pub fn find_controlling_op(ops:&[SparseOp],o_pos:u64)->Option<usize>{
+    let inst = ops.binary_search_by(|probe|{
+        let end = probe.0 + probe.1.oal() as u64;
+        if (probe.0..end).contains(&o_pos){
             return std::cmp::Ordering::Equal
-        }else if probe.o_start() > o_pos {
+        }else if probe.0 > o_pos {
             return std::cmp::Ordering::Greater
         }else{
             return std::cmp::Ordering::Less
@@ -150,37 +80,37 @@ pub fn find_controlling_inst(insts:&[SparseOps],o_pos:u64)->Option<usize>{
     }
 }
 
-///Returns a cloned and clipped subslice of instructions that exactly covers the requested output range.
+///Returns a cloned and clipped subslice of ops that exactly covers the requested output range.
 /// # Arguments
-/// * `instructions` - The list of instructions to extract from.
+/// * `ops` - The list of ops to extract from.
 /// * `start` - The output position (output byte offset) to start the slice at.
 /// * `len` - The length of the slice in output bytes.
 /// # Returns
-/// A vector containing the cloned and clipped instructions that exactly cover the requested output range.
-/// If the output range is not covered by the instructions, None is returned.
+/// A vector containing the cloned and clipped ops that exactly cover the requested output range.
+/// If the output range is not covered by the ops, None is returned.
 ///
-/// This does not check that the instructions are sequential.
-pub fn get_exact_slice(instructions:&[SparseOps],start:u64,len:u32)->Option<Vec<SparseOps>>{
-    let start_idx = find_controlling_inst(instructions,start)?;
+/// This does not check that the ops are sequential.
+pub fn get_exact_slice(ops:&[SparseOp],start:u64,len:u32)->Option<Vec<SparseOp>>{
+    let start_idx = find_controlling_op(ops,start)?;
     let end_pos = start + len as u64;
     let mut slice = Vec::new();
     let mut complete = false;
 
-    for inst in instructions[start_idx..].iter() {
+    for (o_start, inst) in ops[start_idx..].iter() {
         let inst_len = inst.oal();
-        let o_start = inst.o_start();
         let cur_inst_end = o_start + inst_len as u64;
         let mut cur_inst = inst.clone();
-        if start > o_start {
+        let op_start = if &start > o_start {
             let skip = start - o_start;
             cur_inst.skip(skip as u32);
-        }
+            start
+        }else{*o_start};
         if end_pos < cur_inst_end {
             let trunc = cur_inst_end - end_pos;
             cur_inst.trunc(trunc as u32);
         }
         debug_assert!(cur_inst.oal() > 0, "The instruction length is zero");
-        slice.push(cur_inst);
+        slice.push((op_start,cur_inst));
 
         if cur_inst_end >= end_pos {
             complete = true;
@@ -239,7 +169,7 @@ impl Stats {
 
 ///Extracts all instructions from all windows.
 ///Memory consumption may be 2-4x the size of the encoded (uncompressed) patch.
-pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<SparseOps>, Stats)>{
+pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<SparseOp>, Stats)>{
     let mut output = Vec::new();
     let mut reader = SectionReader::new(patch)?;
     let mut o_pos_start = 0;
@@ -249,7 +179,7 @@ pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<
             let oal_len = inst.oal() as usize;
             match &inst{
                 smdiff_common::Op::Run(_) => {
-                    output.push(SparseOps{o_pos_start,op: inst});
+                    output.push((o_pos_start,inst));
                     stats.run(oal_len);
                 },
                 smdiff_common::Op::Copy(c) => {
@@ -261,12 +191,12 @@ pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<
                             stats.copy_o(oal_len);
                         },
                     }
-                    output.push(SparseOps{o_pos_start,op: inst});
+                    output.push((o_pos_start,inst));
                     stats.copy_d(oal_len);
 
                 },
                 smdiff_common::Op::Add(_) => {
-                    output.push(SparseOps{o_pos_start,op: inst});
+                    output.push((o_pos_start,inst));
                     stats.add(oal_len);
                 },
             }
@@ -278,30 +208,30 @@ pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<
 }
 
 /// This function will dereference all Copy_Output instructions in the extracted instructions.
-pub fn deref_copy_o(extracted:Vec<SparseOps>)->Vec<SparseOps>{
+pub fn deref_copy_o(extracted:Vec<SparseOp>)->Vec<SparseOp>{
     //TODO: We could optimize by having get_exact_slice return *what to do* to dereference the copy.
     // The advantage would be we wouldn't clone any Ops.
     // We would point to the first and last index in `extracted` and the skip/trunc values for those two ops.
     // This is faster and more memory efficient.
     // However, we need to deal with an enum type that will make a mess of things when we get to the main merge fn.
-    let mut output:Vec<SparseOps> = Vec::with_capacity(extracted.len());
+    let mut output:Vec<SparseOp> = Vec::with_capacity(extracted.len());
     let mut cur_o_pos = 0;
-    for SparseOps { op: inst, ..  } in extracted {
-        match inst {
+    for (_,op) in extracted {
+        match op {
             Op::Copy(copy) if matches!(copy.src, smdiff_common::CopySrc::Output) => {
                 //let copy = copy.clone();
                 let o_start = copy.addr;
-                let resolved = get_exact_slice(output.as_slice(), o_start, copy.oal() as u32).unwrap();
-                for resolved_inst in resolved {
+                let resolved = get_exact_slice(output.as_slice(), o_start, copy.len as u32).unwrap();
+                for (_,resloved_op) in resolved {
                     let o_pos_start = cur_o_pos;
-                    cur_o_pos += resolved_inst.op.oal() as u64;
-                    output.push(SparseOps { o_pos_start, op: resolved_inst.op });
+                    cur_o_pos += resloved_op.oal() as u64;
+                    output.push((o_pos_start,resloved_op));
                 }
             },
             _ => {
                 let o_pos_start = cur_o_pos;
-                cur_o_pos += inst.oal() as u64;
-                output.push(SparseOps { o_pos_start, op: inst })
+                cur_o_pos += op.oal() as u64;
+                output.push((o_pos_start,op))
 
             },
         }
@@ -309,9 +239,9 @@ pub fn deref_copy_o(extracted:Vec<SparseOps>)->Vec<SparseOps>{
     output
 }
 
-fn find_mergeable_copies(extract:&[SparseOps],shift:usize,dest:&mut Vec<usize>){
-    for (i,ext) in extract.iter().enumerate(){
-        match ext.op {
+fn find_mergeable_copies(extract:&[SparseOp],shift:usize,dest:&mut Vec<usize>){
+    for (i,(_,op)) in extract.iter().enumerate(){
+        match op {
             Op::Copy(copy) if matches!(copy.src, smdiff_common::CopySrc::Dict) => {
                 dest.push(i+shift);
             },
@@ -319,11 +249,11 @@ fn find_mergeable_copies(extract:&[SparseOps],shift:usize,dest:&mut Vec<usize>){
         }
     }
 }
-//Merger struct that can accept merging of additional patches.
+///Merger struct that can accept merging of additional patches.
 #[derive(Clone, Debug)]
 pub struct Merger{
     ///The summary patch that will be written to the output.
-    terminal_patch: Vec<SparseOps>,
+    terminal_patch: Vec<SparseOp>,
     ///If this is empty, merging a patch will have no effect.
     ///These are where TerminalInst::CopySS are found.
     terminal_copy_indices: Vec<usize>,
@@ -341,7 +271,7 @@ impl Merger {
     pub fn new<R:Read + Seek>(terminal_patch:R) -> std::io::Result<Result<Merger,SummaryPatch>> {
         let (terminal_patch,stats) = extract_patch_instructions(terminal_patch)?;
         if stats.copy_bytes == 0{
-            return Ok(Err(SummaryPatch(terminal_patch.into_iter().map(|s|s.op).collect())));
+            return Ok(Err(SummaryPatch(terminal_patch.into_iter().map(|s|s.1).collect())));
         }
         let mut terminal_copy_indices = Vec::new();
         //we for sure need to translate local. I think translate global isn't needed??
@@ -366,8 +296,8 @@ impl Merger {
         debug_assert!({
             let mut x = 0;
             for inst in self.terminal_patch.iter(){
-                assert_eq!(x,inst.o_pos_start);
-                x += inst.op.oal() as u64;
+                assert_eq!(x,inst.0);
+                x += inst.1.oal() as u64;
             }
             true
         });
@@ -379,12 +309,12 @@ impl Merger {
         let mut inserts = Vec::with_capacity(self.terminal_copy_indices.len());
         let mut shift = 0;
         for i in self.terminal_copy_indices{
-            let SparseOps { op: inst,.. } = self.terminal_patch[i].clone();
-            let copy = inst.take_copy().expect("Expected Copy");
+            let (_,op) = self.terminal_patch[i].clone();
+            let copy = op.take_copy().expect("Expected Copy");
             //this a src window copy that we need to resolve from the predecessor patch.
             debug_assert!(matches!(copy.src, smdiff_common::CopySrc::Dict));
             let o_start = copy.addr; //ssp is o_pos, u is offset from that.
-            let resolved = get_exact_slice(&predecessor_patch, o_start, copy.oal() as u32).unwrap();
+            let resolved = get_exact_slice(&predecessor_patch, o_start, copy.len as u32).unwrap();
             //debug_assert_eq!(sum_len_in_o(&resolved), copy.len_in_o() as u64, "resolved: {:?} copy: {:?}",resolved,copy);
             find_mergeable_copies(&resolved, i+shift, &mut terminal_copy_indices);
             shift += resolved.len() - 1;
@@ -395,15 +325,16 @@ impl Merger {
         //debug_assert_eq!(sum_len_in_o(&self.terminal_patch), self.final_size, "final size: {} sum_len: {}",self.final_size,sum_len_in_o(&self.terminal_patch));
         if terminal_copy_indices.is_empty(){
 
-            Ok(Err(SummaryPatch(expand_to(self.terminal_patch, inserts, |s|s.op))))
+            Ok(Err(SummaryPatch(expand_to(self.terminal_patch, inserts, |s|s.1))))
         }else{
             self.terminal_patch = expand_to(self.terminal_patch, inserts, |s|s);
             self.terminal_copy_indices = terminal_copy_indices;
             Ok(Ok(self))
         }
     }
+    ///Finishes the merger and returns the final summary patch ready to be written.
     pub fn finish(self)->SummaryPatch{
-        SummaryPatch(self.terminal_patch.into_iter().map(|s|s.op).collect())
+        SummaryPatch(self.terminal_patch.into_iter().map(|s|s.1).collect())
     }
 
 }
@@ -415,7 +346,7 @@ impl SummaryPatch{
     ///Writes the summary patch to a sink.
     /// # Arguments
     /// * `sink` - The sink to write the summary patch to.
-    /// * `max_u_size` - The maximum size of the super string U. If None, the default is 256MB. This is used to help determine when new windows are created.
+    /// * `max_win_size` - The maximum output size for any window of instructions. Ignored If this will fit in micro format.
     /// # Returns
     /// The sink that was passed in.
     pub fn write<W:Write>(self,mut sink:W,max_win_size:Option<usize>)->std::io::Result<W>{
@@ -448,12 +379,12 @@ impl SummaryPatch{
     }
 }
 fn expand_to<T, F>(
-    mut target: Vec<SparseOps>,
-    inserts: Vec<(usize, Vec<SparseOps>)>,
+    mut target: Vec<SparseOp>,
+    inserts: Vec<(usize, Vec<SparseOp>)>,
     mut converter: F,
 ) -> Vec<T>
 where
-    F: FnMut(SparseOps) -> T,
+    F: FnMut(SparseOp) -> T,
 {
     // Calculate the total number of elements to be inserted to determine the new vector's length.
     let total_insertions: usize = inserts.iter().map(|(_, ins)| ins.len()).sum();
@@ -475,8 +406,8 @@ where
         while cur_idx < insert_pos {
             match target.pop() {
                 Some(mut elem) => {
-                    let len = elem.oal();
-                    elem.o_pos_start = cur_o_pos;
+                    let len = elem.1.oal();
+                    elem.0 = cur_o_pos;
                     cur_o_pos += len as u64;
                     result.push(converter(elem));
                     cur_idx += 1;
@@ -486,8 +417,8 @@ where
         }
         // Insert the new elements.
         for mut elem in insert_vec {
-            let len = elem.oal();
-            elem.o_pos_start = cur_o_pos;
+            let len = elem.1.oal();
+            elem.0 = cur_o_pos;
             cur_o_pos += len as u64;
             result.push(converter(elem));
         }
@@ -497,8 +428,8 @@ where
 
     // After processing all inserts, copy any remaining elements from the original vector.
     while let Some(mut elem) = target.pop() {
-        let len = elem.oal();
-        elem.o_pos_start = cur_o_pos;
+        let len = elem.1.oal();
+        elem.0 = cur_o_pos;
         cur_o_pos += len as u64;
         result.push(converter(elem));
     }
