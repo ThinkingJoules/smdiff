@@ -36,6 +36,18 @@ pub struct FileHeader {
 }
 
 impl FileHeader {
+    pub fn new_micro(num_operations: u8) -> Self {
+        Self {
+            compression_algo: 0,
+            format: Format::MicroFormat{num_operations},
+        }
+    }
+    pub fn new_window() -> Self {
+        Self {
+            compression_algo: 0,
+            format: Format::WindowFormat,
+        }
+    }
     pub fn is_compressed(&self) -> bool {
         self.compression_algo != 0
     }
@@ -100,6 +112,13 @@ impl<A> Op<A> {
     }
     pub fn is_copy(&self) -> bool {
         matches!(self, Op::Copy(_))
+    }
+    pub fn take_copy(&self) -> Option<Copy> {
+        if let Op::Copy(copy) = self {
+            Some(*copy)
+        } else {
+            None
+        }
     }
 }
 impl<A:AddOp> Op<A> {
