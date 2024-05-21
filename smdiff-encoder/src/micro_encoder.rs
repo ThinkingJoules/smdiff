@@ -116,7 +116,7 @@ pub fn encode_one_section<'a>(src_dict: &ChunkHashMap, trgt_dict: &ChunkHashMap,
         }else{
             //let dur = start_loop.elapsed();
             //miss_avg.add_sample(dur);
-            copy_pos += hash_size as usize;
+            copy_pos += 1 as usize;
         }
     }
     if rel_o < max_end_pos{

@@ -29,14 +29,14 @@ impl AddOp for Add<'_> {
 pub type Op<'a> = smdiff_common::Op<Add<'a>>;
 use smdiff_common::{Copy, CopySrc, Run, WindowHeader};
 
-pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, trgt: &mut R, writer: &mut W,match_trgt:bool) -> std::io::Result<()> {
+pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, trgt: &mut R, writer: &mut W,match_trgt:bool,max_copy_step_size:u8) -> std::io::Result<()> {
     //to test we just read all of src and trgt in to memory.
     let mut src_bytes = Vec::new();
     src.read_to_end(&mut src_bytes)?;
     let mut trgt_bytes = Vec::new();
     trgt.read_to_end(&mut trgt_bytes)?;
-    let start = std::time::Instant::now();
-    dbg!(src_bytes.len()+trgt_bytes.len());
+    //let start = std::time::Instant::now();
+    //dbg!(src_bytes.len()+trgt_bytes.len());
     if trgt_bytes.len() > MAX_WIN_SIZE {
         //MUST be window format
         //We need to chunk the trgt bytes in max_win_size chunks and encode them.
@@ -46,52 +46,52 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
 
         let hash_size = (win_size as u32/1024/1024).max(3); //win size in mb for hash size in bytes.
         let tab_size = 16777215;
-        let start_dict_creation = std::time::Instant::now();
+        //let start_dict_creation = std::time::Instant::now();
         let mut src_chunks = Vec::new();
-        let mut dict_size = 0;
+        //let mut dict_size = 0;
         for (num,chunk) in src_bytes.chunks(win_size).enumerate(){
-            dict_size += chunk.len();
+            //dict_size += chunk.len();
             let abs_start_pos = (num * win_size) as u32;
             let src_map = hash_chunk(chunk, abs_start_pos,hash_size, MULTIPLICATVE, tab_size);
-            dbg!(src_map.num_hashes());
+            //dbg!(src_map.num_hashes());
             src_chunks.push(src_map);
         }
         let mut trgt_chunks = Vec::new();
         if match_trgt{
             for (num,chunk) in trgt_bytes.chunks(win_size).enumerate(){
-                dict_size += chunk.len();
+                //dict_size += chunk.len();
                 let abs_start_pos = (num * win_size) as u32;
                 let trgt_map = hash_chunk(chunk, abs_start_pos,hash_size, MULTIPLICATVE, tab_size);
-                dbg!(trgt_map.num_hashes());
+                //dbg!(trgt_map.num_hashes());
                 trgt_chunks.push(trgt_map);
             }
         }
-        let dict_creation_dur = start_dict_creation.elapsed();
-        println!("Dict creation took: {:?} size: {} (mb/s: {}) hash_size:{}", dict_creation_dur,dict_size, (dict_size)as f64 / 1024.0 / 1024.0 / dict_creation_dur.as_secs_f64(),hash_size);
+        //let dict_creation_dur = start_dict_creation.elapsed();
+        //println!("Dict creation took: {:?} size: {} (mb/s: {}) hash_size:{}", dict_creation_dur,dict_size, (dict_size)as f64 / 1024.0 / 1024.0 / dict_creation_dur.as_secs_f64(),hash_size);
         let trgt_bytes = trgt_bytes.as_slice();
         let mut output_tot = 0;
         for (chunk_num,chunk) in trgt_bytes.chunks(win_size).enumerate() {
             let win_start = chunk_num * win_size;
             let win_end = win_start + chunk.len();
-            let (header,ops) = encode_window(&src_chunks,&trgt_chunks, &src_bytes, &trgt_bytes, win_start..win_end, hash_size as usize);
+            let (header,ops) = encode_window(&src_chunks,&trgt_chunks, &src_bytes, &trgt_bytes, win_start..win_end, hash_size as usize,max_copy_step_size);
             output_tot += header.output_size;
             //dbg!(header);
             write_win_section(&ops,header,writer)?;
-            println!("% done: {}, elapsed so far: {:?}",((chunk_num+1) as f64 / num_windows as f64)*100.0,start.elapsed());
+            //println!("% done: {}, elapsed so far: {:?}",((chunk_num+1) as f64 / num_windows as f64)*100.0,start.elapsed());
         }
         assert_eq!(output_tot as usize,trgt_bytes.len());
     }else{
         //MIGHT be window format
         let hash_size = 3;
-        let start_dict_creation = std::time::Instant::now();
+        //let start_dict_creation = std::time::Instant::now();
         let src_dict = hash_chunk(&src_bytes, 0,hash_size, MULTIPLICATVE, src_bytes.len() as u32);
         let trgt_dict = if match_trgt{
             hash_chunk(&trgt_bytes, 0,hash_size, MULTIPLICATVE,trgt_bytes.len() as u32)
         }else{
             ChunkHashMap::new(0)
         };
-        let dict_creation_dur = start_dict_creation.elapsed();
-        println!("Dict creation took: {:?} size: {} (mb/s: {})", dict_creation_dur,src_bytes.len(), (src_bytes.len())as f64 / 1024.0 / 1024.0 / dict_creation_dur.as_secs_f64());
+        //let dict_creation_dur = start_dict_creation.elapsed();
+        //println!("Dict creation took: {:?} size: {} (mb/s: {})", dict_creation_dur,src_bytes.len(), (src_bytes.len())as f64 / 1024.0 / 1024.0 / dict_creation_dur.as_secs_f64());
 
         let (header,ops) = encode_one_section(&src_dict,&trgt_dict, &src_bytes, &trgt_bytes, hash_size as usize);
         let format = if header.num_operations as usize <= MICRO_MAX_INST_COUNT {Format::MicroFormat{num_operations:header.num_operations as u8}} else {Format::WindowFormat};

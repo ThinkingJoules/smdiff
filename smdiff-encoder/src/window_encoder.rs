@@ -18,7 +18,7 @@ use smdiff_common::{Copy, CopySrc, Run, WindowHeader, MAX_INST_SIZE, MAX_WIN_SIZ
 use crate::{add::{make_add_runs, make_adds}, hash::{find_sub_string_in_src, find_sub_string_in_trgt, find_substring_in_src, find_substring_in_trgt, ChunkHashMap, HashCursor, MULTIPLICATVE}, run::handle_run, CopyScore, Op};
 
 //Use with full src or trgt dict only
-pub fn encode_window<'a>(src_dict: &[ChunkHashMap], trgt_dict: &[ChunkHashMap], src_bytes:&[u8], target: &'a [u8], window_range:Range<usize>,hash_size:usize) -> (WindowHeader,Vec<Op<'a>>){
+pub fn encode_window<'a>(src_dict: &[ChunkHashMap], trgt_dict: &[ChunkHashMap], src_bytes:&[u8], target: &'a [u8], window_range:Range<usize>,hash_size:usize,max_copy_step_size:u8) -> (WindowHeader,Vec<Op<'a>>){
     if target.is_empty(){
         return (WindowHeader{ num_operations: 0, num_add_bytes: 0, output_size: 0 },Vec::new());
     }
@@ -147,7 +147,7 @@ pub fn encode_window<'a>(src_dict: &[ChunkHashMap], trgt_dict: &[ChunkHashMap], 
         }else{
             //let dur = start_loop.elapsed();
             //miss_avg.add_sample(dur);
-            copy_pos += hash_size as usize;
+            copy_pos += hash_size.min(max_copy_step_size as usize);
             //copy_pos += 1;
         }
     }
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn test_empty_files(){
         let target = [];
-        let (_,ops) = encode_window(&[], &[],&[],&target,0..0,3);
+        let (_,ops) = encode_window(&[], &[],&[],&target,0..0,3,1);
         assert_eq!(ops, Vec::<Op>::new());
     }
 
@@ -310,7 +310,7 @@ mod tests {
         let target = [6,7,8,9,10];
         let s_dict = &[hash_chunk(&src, 0,3, MULTIPLICATVE, 15)];
         let t_dict = &[hash_chunk(&target, 0,3, MULTIPLICATVE, 15)];
-        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..5,3);
+        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..5,3,1);
         assert_eq!(ops, vec![Op::Add(Add{bytes: &target})]);
     }
 
@@ -320,7 +320,7 @@ mod tests {
         let target = [1,1,1,1,1];
         let s_dict = &[hash_chunk(&src, 0,3, MULTIPLICATVE, 15)];
         let t_dict = &[hash_chunk(&target, 0,3, MULTIPLICATVE, 15)];
-        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..5,3);
+        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..5,3,1);
         assert_eq!(ops, vec![Op::Run(Run{len: 5, byte: 1})]);
     }
 
@@ -330,7 +330,7 @@ mod tests {
         let target = [1,1,1,1,1,2,3,4,5];
         let s_dict = &[hash_chunk(&src, 0,3, MULTIPLICATVE, 15)];
         let t_dict = &[hash_chunk(&target, 0,3, MULTIPLICATVE, 15)];
-        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..9,3);
+        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..9,3,1);
         assert_eq!(ops, vec![Op::Run(Run{len: 5, byte: 1}), Op::Copy(Copy{src: CopySrc::Dict, addr: 1, len: 4})]);
     }
     #[test]
@@ -339,7 +339,7 @@ mod tests {
         let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
         let s_dict = &[hash_chunk(&src, 0,3, MULTIPLICATVE, 20)];
         let t_dict = &[hash_chunk(&target, 0,3, MULTIPLICATVE, 20)];
-        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..18,3);
+        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..18,3,1);
         assert_eq!(ops, vec![
             Op::Add(Add{bytes: &target[0..6]}), //4
             Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }), //2
@@ -354,7 +354,7 @@ mod tests {
         let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
         let s_dict = &[hash_chunk(&src, 0,3, MULTIPLICATVE, 20)];
         let t_dict = &[hash_chunk(&target, 0,3, MULTIPLICATVE, 20)];
-        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..18,3);
+        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..18,3,1);
         assert_eq!(ops, vec![
             Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 3}), //2
             Op::Add(Add{bytes: &target[3..6]}), //4
@@ -370,7 +370,7 @@ mod tests {
         let target = [1,2,3,4,5,6,1,2,3,4,5,6,6,2,3,4,5,7];
         let s_dict = &[hash_chunk(&src, 0,3, MULTIPLICATVE, 20)];
         let t_dict = &[hash_chunk(&target, 0,3, MULTIPLICATVE, 20)];
-        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..18,3);
+        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..18,3,1);
         assert_eq!(ops, vec![
             Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 6}), //2
             Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 6 }), //2
@@ -386,7 +386,7 @@ mod tests {
         let target = [1,2,3,4,5,6];
         let s_dict = &[hash_chunk(&src, 0,3, MULTIPLICATVE, 20)];
         let t_dict = &[hash_chunk(&target, 0,3, MULTIPLICATVE, 20)];
-        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..6,3);
+        let (_,ops) = encode_window(s_dict,t_dict,&src, &target,0..6,3,1);
         assert_eq!(ops, vec![
             Op::Copy(Copy{src: CopySrc::Dict, addr:0, len: 6}), //2
         ]);
