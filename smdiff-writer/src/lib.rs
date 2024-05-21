@@ -6,9 +6,9 @@ use smdiff_common::{diff_addresses_to_i64, size_routine, write_i_varint, write_u
 pub fn write_file_header<W: std::io::Write>(header: &FileHeader, writer:&mut W) -> std::io::Result<()> {
     let mut header_byte = header.compression_algo;
     if let Format::MicroFormat { num_operations } = header.format {
-        header_byte |= num_operations & 0b00011111;
+        header_byte |= num_operations << 3;
     }else{
-        header_byte |= 0b00100000;  // Set format bit
+        header_byte |= 0b00000100;  // Set format bit
     }
     write_u8(writer, header_byte)
 }

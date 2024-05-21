@@ -23,9 +23,9 @@ impl AddOp for Add{
 }
 
 pub fn decode_file_header(header_byte: u8) -> FileHeader {
-    let compression_algo = (header_byte & 0b11000000) >> 6;
-    let format_bit = header_byte & 0b00100000;
-    let operations_bits = header_byte & 0b0001_1111;
+    let compression_algo = header_byte & 0b00000011;
+    let format_bit = header_byte & 0b00000100;
+    let operations_bits = (header_byte & 0b1111_100) >> 3;
 
     let format = if format_bit == 0 {
         Format::MicroFormat{num_operations:operations_bits}
