@@ -7,6 +7,7 @@ use std::time::Instant;
 use smdiff_reader::{read_section, SectionReader};
 
 use crate::{Stats, DIR_PATH};
+use colored::*;
 
 pub fn vc_analysis()-> Result<(), Box<dyn std::error::Error>> {
     let mut file = fs::File::open(&Path::new(DIR_PATH).join("patch_a.ovcd.vcdiff"))?;
@@ -58,7 +59,7 @@ pub fn vc_analysis()-> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
-    let mut file = fs::File::open(&Path::new(DIR_PATH).join("patch_a.ovcd.vcdiff"))?;
+    let mut file = fs::File::open(&Path::new(DIR_PATH).join("patch_a.ovcd.vcdiff")).unwrap();
     let mut patch_a = Vec::new();
     file.read_to_end(&mut patch_a)?;
     let mut converted_a = Vec::new();
@@ -77,7 +78,7 @@ pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
     println!("Original: {}\nConverted: {}", reader.get_ref().len(), converted_a.len());
 
     //read 317.iso
-    let mut file = fs::File::open(&Path::new(DIR_PATH).join("317.iso"))?;
+    let mut file = fs::File::open(&Path::new(DIR_PATH).join("317.iso")).unwrap();
     let mut src = Vec::new();
     file.read_to_end(&mut src)?;
     let mut src = Cursor::new(src);
@@ -87,19 +88,19 @@ pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm)?;
     let duration = start.elapsed();
     //open 318 and read to end
-    let mut file = fs::File::open(&Path::new(DIR_PATH).join("318.iso"))?;
+    let mut file = fs::File::open(&Path::new(DIR_PATH).join("318.iso")).unwrap();
     let mut target = Vec::new();
     file.read_to_end(&mut target)?;
     println!("Time elapsed in apply_patch() is: {:?}", duration);
     if decode_sm != target{
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
     }else{
-        println!("Translate and apply SUCCESS!");
+        println!("{}","Translate and apply SUCCESS!".green());
     }
 
 
-    let mut file = fs::File::open(&Path::new(DIR_PATH).join("patch_b.ovcd.vcdiff"))?;
+    let mut file = fs::File::open(&Path::new(DIR_PATH).join("patch_b.ovcd.vcdiff")).unwrap();
     let mut patch_b = Vec::new();
     file.read_to_end(&mut patch_b)?;
     let mut converted_b = Vec::new();

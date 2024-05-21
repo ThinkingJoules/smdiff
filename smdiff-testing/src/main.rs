@@ -3,24 +3,35 @@
 mod gcc_tests;
 mod size_tests;
 mod vc_to_sm;
+mod merge_test;
 
 // use params::*;
 use vc_to_sm::*;
 use size_tests::*;
 use gcc_tests::*;
+use merge_test::*;
 /*
 Xdelta3 seems to not produce valid patches.
 Alternatively both open-vcdiff and my impl made the same error..
 */
 const DIR_PATH: &str = "../target/downloads";
+const _URLS: [&str; 6] = [
+    "https://dl-cdn.alpinelinux.org/alpine/v3.17/releases/x86_64/alpine-standard-3.17.0-x86_64.iso",
+    "https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-standard-3.18.0-x86_64.iso",
+    "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-standard-3.19.0-x86_64.iso",
+    "https://mirrors.concertpass.com/gcc/releases/gcc-2.95.1/gcc-2.95.1.tar.gz",
+    "https://mirrors.concertpass.com/gcc/releases/gcc-2.95.1/gcc-2.95.2.tar.gz",
+    "https://mirrors.concertpass.com/gcc/releases/gcc-2.95.1/gcc-2.95.3.tar.gz",
+];
 fn main()-> Result<(), Box<dyn std::error::Error>> {
-    //encode_test_gcc_2951_2952()?;
-    //encode_test_gcc_2952_2953()?;
+    merge_2951_2952_2953()?;
+    encode_test_gcc_2951_2952()?;
+    encode_test_gcc_2952_2953()?;
     encode_test_micro()?;
     encode_test_small()?;
     encode_test_large()?;
-    //vc_analysis()?;
     //vc_to_sm_test()?;
+    // vc_analysis()?;
     Ok(())
 }
 

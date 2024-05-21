@@ -8,6 +8,7 @@ use smdiff_reader::SectionReader;
 
 use crate::{Stats, DIR_PATH};
 
+use colored::*;
 
 pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     let mut f_317 = fs::File::open(&Path::new(DIR_PATH).join("317.iso"))?;
@@ -21,7 +22,7 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,255)?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
@@ -52,7 +53,7 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        println!("{:?}", stats);
+        //println!("{:?}", stats);
         //collect the s_copy_lens and sort ascending by key, then print out all the keys and values
         let mut s_copy_lens: Vec<_> = s_copy_lens.into_iter().collect();
         s_copy_lens.sort_by_key(|k| k.0);
@@ -77,15 +78,15 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(target.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
     Ok(())
 }
@@ -97,7 +98,7 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1)?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
@@ -153,15 +154,15 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(target.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
     Ok(())
 }
@@ -173,7 +174,7 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1)?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
@@ -229,15 +230,15 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(target.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
     Ok(())
 }

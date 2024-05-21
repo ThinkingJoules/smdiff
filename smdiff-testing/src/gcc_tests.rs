@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 use std::time::Instant;
+use colored::*;
 
 use crate::DIR_PATH;
 
@@ -14,7 +15,7 @@ pub fn encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size Target Only (Compress): {}", patch.len());
@@ -33,15 +34,15 @@ pub fn encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(f_2952_bytes.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2952_bytes.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2952_bytes.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
 
     let mut f_2951 = fs::File::open(&Path::new(DIR_PATH).join("gcc-2.95.1.tar"))?;
@@ -51,7 +52,7 @@ pub fn encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC only: {}", patch.len());
@@ -70,22 +71,22 @@ pub fn encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(f_2952_bytes.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2952_bytes.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2952_bytes.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
 
     src.rewind()?;
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch.len());
@@ -104,15 +105,15 @@ pub fn encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(f_2952_bytes.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2952_bytes.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2952_bytes.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
 
     Ok(())
@@ -126,7 +127,7 @@ pub fn encode_test_gcc_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true).unwrap();
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size Target Only (Compress): {}", patch.len());
@@ -145,15 +146,15 @@ pub fn encode_test_gcc_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(f_2953_bytes.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2953_bytes.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2953_bytes.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
 
     let mut f_2952 = fs::File::open(&Path::new(DIR_PATH).join("gcc-2.95.1.tar"))?;
@@ -163,7 +164,7 @@ pub fn encode_test_gcc_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC only: {}", patch.len());
@@ -182,22 +183,22 @@ pub fn encode_test_gcc_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(f_2953_bytes.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2953_bytes.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2953_bytes.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
 
     src.rewind()?;
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch.len());
@@ -216,15 +217,15 @@ pub fn encode_test_gcc_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
         let mut i = 0;
         for (a,b) in decode_sm.iter().zip(f_2953_bytes.iter()){
             if a != b{
-                println!("Mismatch at index: {} | Decoded: {} | Target: {}",i,a,b);
+                eprintln!("{}", format!("Mismatch at index: {} | Decoded: {} | Target: {}", i, a, b).red());
                 break;
             }
             i += 1;
         }
         //print len
-        println!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2953_bytes.len());
+        eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), f_2953_bytes.len());
     }else{
-        println!("Patch SUCCESS!");
+        println!("{}","Patch SUCCESS!".green());
     }
 
     Ok(())
