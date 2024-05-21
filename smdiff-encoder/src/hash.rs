@@ -5,10 +5,10 @@ use crate::{addr_cost, CopyScore};
 const INITIAL_VALUE: u32 = 0; //5381;  // Not sure how to roll non-zero initial value
 pub const MULTIPLICATVE: u32 = 257;
 /// Returns (start_pos, match_len) of the longest match in `chunks` for `trgt_exact`.
-pub fn find_sub_string_in_src(src_slice: &[u8],chunks:&[ChunkHashMap],trgt_slice:&[u8],trgt_hash:u32,hash_len:usize,trgt_start_pos:usize,last_addr:u64)->Option<CopyScore>{
+pub fn find_sub_string_in_src(src_slice: &[u8],chunks:&[ChunkHashMap],trgt_window:&[u8],trgt_hash:u32,hash_len:usize,trgt_win_start:usize,last_addr:u64)->Option<CopyScore>{
     let mut best = None;
     for chunk_map in chunks {
-        let found = find_substring_in_src(src_slice,chunk_map,&trgt_slice, trgt_hash,hash_len,trgt_start_pos,last_addr);
+        let found = find_substring_in_src(src_slice,chunk_map,&trgt_window, trgt_hash,hash_len,trgt_win_start,last_addr);
         if found > best {
             best = found;
         }
@@ -28,15 +28,15 @@ pub fn find_sub_string_in_src(src_slice: &[u8],chunks:&[ChunkHashMap],trgt_slice
     best
 }
 
-pub fn find_substring_in_src(slice: &[u8],map:&ChunkHashMap,trgt_slice:&[u8],trgt_hash:u32,hash_len:usize,trgt_start_pos:usize,last_addr:u64)->Option<CopyScore>{
+pub fn find_substring_in_src(slice: &[u8],map:&ChunkHashMap,trgt_slice:&[u8],trgt_hash:u32,hash_len:usize,trgt_win_start:usize,last_addr:u64)->Option<CopyScore>{
     if let Some(start_positions) = map.get(trgt_hash) {
-        return find_longest_match(slice,start_positions, trgt_slice, hash_len,trgt_start_pos,last_addr);
+        return find_longest_match(slice,start_positions, trgt_slice, hash_len,trgt_win_start,last_addr);
     }
     None
 }
 
 
-pub fn find_longest_match(src_slice: &[u8], positions: &[u32], trgt_slice:&[u8],hash_len:usize,trgt_start_pos:usize,last_addr:u64) -> Option<CopyScore> {
+pub fn find_longest_match(src_slice: &[u8], positions: &[u32], trgt_slice:&[u8],hash_len:usize,trgt_win_start:usize,last_addr:u64) -> Option<CopyScore> {
     // Iterate over each position to use as the starting point for comparison
     // if positions.len() > 500{
     //     dbg!("START",positions.len());
@@ -47,15 +47,16 @@ pub fn find_longest_match(src_slice: &[u8], positions: &[u32], trgt_slice:&[u8],
         if start_pos as usize + best_score.size > src_slice.len() {
             break;
         }
-        let end_pos = start_pos as usize + hash_len;
-        let base_subslice = &src_slice[start_pos as usize..end_pos];
-        let trgt_exact = &trgt_slice[trgt_start_pos..trgt_start_pos+hash_len];
+        let j = start_pos as usize + hash_len;
+        let k = trgt_win_start + hash_len;
+        let base_subslice = &src_slice[start_pos as usize..j];
+        let trgt_exact = &trgt_slice[trgt_win_start..k];
 
         // Only consider this position if it can match the expected_match fully
         if base_subslice == trgt_exact {
             //zipper try to extend the match
             let a_cost = addr_cost(last_addr, start_pos as u64);
-            let max_len = MAX_INST_SIZE.min(trgt_slice.len() - trgt_start_pos);
+            let max_len = std::cmp::min(trgt_slice.len() - k,MAX_INST_SIZE - hash_len);
             if CopyScore::new(a_cost,max_len,start_pos as usize) < best_score {
                 //this suffix is too short to be a better match
                 //this is at the tail of the file.
@@ -64,9 +65,8 @@ pub fn find_longest_match(src_slice: &[u8], positions: &[u32], trgt_slice:&[u8],
                 //and the a_cost larger
                 break;
             }
-            let j = start_pos as usize + hash_len;
-            let max_end = trgt_start_pos + max_len;
-            let count = src_slice[j..].iter().zip(trgt_slice[trgt_start_pos+hash_len..max_end].iter()).take_while(|(&a, &b)| a == b).count();
+            let k_max_end = k + max_len;
+            let count = src_slice[j..].iter().zip(trgt_slice[k..k_max_end].iter()).take_while(|(&a, &b)| a == b).count();
             let match_len = count + hash_len;
             let score = CopyScore::new(a_cost, match_len, start_pos as usize);
 
@@ -88,10 +88,10 @@ pub fn find_longest_match(src_slice: &[u8], positions: &[u32], trgt_slice:&[u8],
         None
     }
 }
-pub fn find_sub_string_in_trgt(chunks:&[ChunkHashMap],trgt_slice:&[u8],trgt_hash:u32,hash_len:usize,trgt_start_pos:usize,last_addr:u64)->Option<CopyScore>{
+pub fn find_sub_string_in_trgt(chunks:&[ChunkHashMap],trgt_slice:&[u8],trgt_hash:u32,hash_len:usize,abs_trgt_start:usize,last_addr:u64)->Option<CopyScore>{
     let mut best = None;
     for chunk in chunks {
-        let found = find_substring_in_trgt(chunk, &trgt_slice, trgt_hash,hash_len,trgt_start_pos,last_addr);
+        let found = find_substring_in_trgt(chunk, &trgt_slice, trgt_hash,hash_len,abs_trgt_start,last_addr);
         if found > best {
             best = found;
         }
@@ -110,27 +110,28 @@ pub fn find_sub_string_in_trgt(chunks:&[ChunkHashMap],trgt_slice:&[u8],trgt_hash
     }
     best
 }
-pub fn find_substring_in_trgt(map:&ChunkHashMap,trgt_slice:&[u8],trgt_hash:u32,hash_len:usize,trgt_start_pos:usize,last_addr:u64)->Option<CopyScore>{
+pub fn find_substring_in_trgt(map:&ChunkHashMap,trgt_slice:&[u8],trgt_hash:u32,hash_len:usize,abs_trgt_start:usize,last_addr:u64)->Option<CopyScore>{
     if let Some(start_positions) = map.get(trgt_hash) {
-        return find_longest_match_up_to(start_positions, &trgt_slice, hash_len,trgt_start_pos,last_addr);
+        return find_longest_match_up_to(start_positions, &trgt_slice, hash_len,abs_trgt_start,last_addr);
     }
     None
 }
-pub fn find_longest_match_up_to(positions: &[u32], trgt_slice:&[u8],hash_len:usize,trgt_start_pos:usize,last_addr:u64) -> Option<CopyScore> {
+pub fn find_longest_match_up_to(positions: &[u32], trgt_slice:&[u8],hash_len:usize,abs_trgt_start:usize,last_addr:u64) -> Option<CopyScore> {
     //let start = std::time::Instant::now();
     let mut best_score = CopyScore::new(isize::MIN, 0, 0);
     for &start_pos in positions {
-        if start_pos as usize + best_score.size >= trgt_start_pos{
+        let k = abs_trgt_start + hash_len;
+        if start_pos as usize + best_score.size.max(hash_len) >= abs_trgt_start || k > trgt_slice.len(){
             break;
         }
-        let end_pos = start_pos as usize + hash_len;
-        let base_subslice = &trgt_slice[start_pos as usize..end_pos];
-        let trgt_exact = &trgt_slice[trgt_start_pos..trgt_start_pos+hash_len];
+        let j = start_pos as usize + hash_len;
+        let base_subslice = &trgt_slice[start_pos as usize..j];
+        let trgt_exact = &trgt_slice[abs_trgt_start..k];
 
         // Only consider this position if it can match the expected_match fully
         if base_subslice == trgt_exact {
             let a_cost = addr_cost(last_addr, start_pos as u64);
-            let max_len = MAX_INST_SIZE.min(trgt_start_pos - start_pos as usize).min(trgt_slice.len() - trgt_start_pos);
+            let max_len = std::cmp::min(trgt_slice.len() - k,abs_trgt_start-j).min(MAX_INST_SIZE - hash_len);
             if CopyScore::new(a_cost,max_len,start_pos as usize) < best_score {
                 //this suffix is too short to be a better match
                 //this is at the tail of the file.
@@ -140,9 +141,9 @@ pub fn find_longest_match_up_to(positions: &[u32], trgt_slice:&[u8],hash_len:usi
                 break;
             }
             //zipper try to extend the match
-            let j = start_pos as usize + hash_len;
-            let max_end = trgt_start_pos + max_len;
-            let count = trgt_slice[j..].iter().zip(trgt_slice[trgt_start_pos+hash_len..max_end].iter()).take_while(|(&a, &b)| a == b).count();
+            let k_max_end = k + max_len;
+            let j_max_end = j + max_len;
+            let count = trgt_slice[j..j_max_end].iter().zip(trgt_slice[k..k_max_end].iter()).take_while(|(&a, &b)| a == b).count();
             let match_len = count + hash_len;
             let score = CopyScore::new(a_cost, match_len, start_pos as usize);
 
