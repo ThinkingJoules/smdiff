@@ -3,22 +3,26 @@ A VCDIFF inspired Encoding Scheme for file differencing.
 
 ## 1. Executive Summary
 
-**SMDIFF** is a binary delta encoding format designed for efficient representation and transmission of differences between two related data sets (source and target). It is inspired by and translatable between the VCDIFF (RFC 3284) format, aiming to provide a simpler and potentially more compact alternative.
+**SMDIFF** is a binary delta encoding format designed for efficient representation and transmission of differences between two related data sets (source and target). It is inspired by and translatable between the VCDIFF (RFC 3284) [1] format, aiming to provide a simpler and potentially more compact alternative.
 
 
 ## 2. Conventions
 
-The basic data unit is a byte.  For portability, SMDIFF shall limit a
+> The basic data unit is a byte.  For portability, SMDIFF shall limit a
 byte to its lower eight bits even on machines with larger bytes. The
 bits in a byte are ordered from right to left so that the least
 significant bit (LSB) has value 1, and the most significant bit
 (MSB), has value 128.
 
-For purposes of exposition in this document, we adopt the convention
+[1]
+
+> For purposes of exposition in this document, we adopt the convention
 that the LSB is numbered 0, and the MSB is numbered 7.  Bit numbers
 never appear in the encoded format itself.
 
-SMDIFF employs two variable-length integer encoding types, derived from the varint format used in Protocol Buffers. This scheme efficiently represents signed integers in a compact manner, especially for smaller values. There is a u-varint (normal protocol buffer spec), and an i-varint.
+[1]
+
+SMDIFF employs two variable-length integer encoding types, both are specified from their use in Protocol Buffers. This scheme efficiently represents signed integers in a compact manner, especially for smaller values. There is a u-varint [2], and an i-varint [3].
 
 The i-varint format utilizes the concept of zig-zag encoding to map signed integers to unsigned values. This transformation allows negative numbers to be encoded efficiently alongside positive ones.
 
@@ -116,7 +120,7 @@ The file header provides essential information about the encoding format and com
 | 2     | Format              | 0 = MicroFormat, 1 = WindowFormat                                                                    |
 | 3-7   | **MicroFormat:** Operations Count<br>**WindowFormat:** Unused | Number of operations in the file (MicroFormat only) |
 
-**Note:** The Compression Algo field is currently unspecified and reserved for future use.
+**Note:** The Compression Algo field will be finalized as part of the spec. However this spec is not to V1 yet.
 
 #### 4.3.2 Window Header
 
@@ -216,13 +220,47 @@ We simply use an i-varint to denote the *difference* from the last copy address 
 
 
 ## 6. Performance
-TODO
-Using the table from the original RFC. I have added something similar using the exact same data.
-- Target Against Target
-- Target Against Source at same starting (not how our Encoder works)
-- Target Against Source & Target (Probably not fair to compare to SMDIFF)
-- Target Against Source & Target with windowing algo (probably most comparable for SMDIFF)
+My spec encoder is a (nearly) 'perfect' encoder. That is, the smdiff encoder considers everything all the time. For windowed format our minimum match might leave some matches missed (hence the 'nearly' perfect). Using micro format (not applicable to the below test), we consider the shortest profitable match possible, always.
 
+Using the table from the original RFC. I have added something similar using the exact same data.
+Using the knowledge that the encoder methods differ, we cannot really compare the outputs directly to know if our format has excessive overhead (more on that below).
+
+What the table below does illustrate, is that window selection is very important if you want to build a more memory efficient encoder. This is evident when comparing Vcdiff-dcw against Smdiff-dcw.
+
+Since computers have advanced greatly and RAM is cheap and still getting cheaper, I elected to build the encoder for modern computers, and not really large file sizes. This allows for better matches and a simpler encoder (no window selection logic) at the cost of not being able to do massive files.
+
+The beauty of the VCDIFF/SMDIFF formats is that the encoder and decoder are independent from each other. So if someone wanted to do massive files they would need to write just an encoder with some sort of window selection to limit memory consumption. This is also easier to do since SMDIFF is so much simpler to comply with the spec.
+
+### 6.1 Example Delta File Sizes
+Below is the explanation from the original RFC:
+```
+Below are the different Vcdiff runs:
+
+    Vcdiff: vcdiff is used as a compressor only.
+
+    Vcdiff-d: vcdiff is used as a differencer only.  That is, it only
+        compares target data against source data.  Since the files
+        involved are large, they are broken into windows.  In this
+        case, each target window, starting at some file offset in the
+        target file, is compared against a source window with the same
+        file offset (in the source file).  The source window is also
+        slightly larger than the target window to increase matching
+        opportunities.
+
+    Vcdiff-dc: This is similar to Vcdiff-d, but vcdiff can also
+        compare target data against target data as applicable.  Thus,
+        vcdiff both computes differences and compresses data.  The
+        windowing algorithm is the same as above.  However, the above
+        hint is recinded in this case.
+
+    Vcdiff-dcw: This is similar to Vcdiff-dc but the windowing
+        algorithm uses a content-based heuristic to select a source
+        window that is more likely to match with a given target window.
+        Thus, the source data segment selected for a target window
+        often will not be aligned with the file offsets of this target
+        window.
+```
+Original Table with Smdiff comparisons
 ```
                 gcc-2.95.1     gcc-2.95.2     gcc-2.95.3
 ---------------------------------------------------------
@@ -233,10 +271,21 @@ Using the table from the original RFC. I have added something similar using the 
 5. Vcdiff-d         -              100,971     26,383,849
 6. Vcdiff-dc        -               97,246     14,461,203
 7. Vcdiff-dcw       -              256,445      1,248,543
-8. Smdiff           -                  TBD      TBD
-9. Smdiff-d         -              100,971     26,383,849
-10.Smdiff-dc        -               97,246     14,461,203
-11.Smdiff-dcw       -              256,445      1,248,543
+8. Smdiff           -           15,827,696     15,815,017
+9. Smdiff-d         -               96,652        451,818
+10.Smdiff-dc        -                  N/A            N/A
+11.Smdiff-dcw       -               86,309        251,370
 ```
+It is probably really only fair to compare the 'compress only' (Vcdiff & Smdiff). As noted, my test encoder is a (nearly) 'perfect' encoder.
 
+If we want to compare the *format* we need a different approach. Since I do not have the original source code for VCDIFF enocoder, or the exact delta files used in the tables, I cannot do an exact comparison to the data in the table. From testing against other extant encoders, I converted the .vcdiff delta file directly in to .smdiff format. The resulting files were actually a little less than 1% *smaller*. They did not have any periodic sequences in the original .vcdiff format. The Smdiff output is ~3% larger than the table values for Vcdiff, so I would assume that they must had a few periodic sequences in their data.
 
+## 7. Conclusion
+My conclusion is that this new format is probably about a wash unless your data (and encoder) can leverage the periodic sequence that does not exist in SMDIFF. The spec is massively simplified, and having fixed and known secondary compressors defined in the spec will aide in interoperability.
+
+## 8. References
+[1] https://www.rfc-editor.org/rfc/rfc3284
+
+[2] https://protobuf.dev/programming-guides/encoding/#varints
+
+[3] https://protobuf.dev/programming-guides/encoding/#signed-ints
