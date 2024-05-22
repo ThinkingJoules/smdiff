@@ -4,6 +4,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 use std::time::Instant;
 
+use smdiff_common::Format;
 use smdiff_reader::SectionReader;
 
 use crate::{Stats, DIR_PATH};
@@ -22,13 +23,13 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,255)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,255,false,Format::Segregated)?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size: {}", patch.len());
 
-    let mut sec = SectionReader::new(Cursor::new(patch))?;
+    let mut sec = SectionReader::new(Cursor::new(patch));
     while let Ok(Some((ops,_))) = sec.next(){
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
@@ -98,13 +99,13 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1,false,Format::Segregated)?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size: {}", patch.len());
 
-    let mut sec = SectionReader::new(Cursor::new(patch))?;
+    let mut sec = SectionReader::new(Cursor::new(patch));
     while let Ok(Some((ops,_))) = sec.next(){
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
@@ -174,13 +175,13 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1,false,Format::Segregated)?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size: {}", patch.len());
 
-    let mut sec = SectionReader::new(Cursor::new(patch))?;
+    let mut sec = SectionReader::new(Cursor::new(patch));
     while let Ok(Some((ops,_))) = sec.next(){
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();

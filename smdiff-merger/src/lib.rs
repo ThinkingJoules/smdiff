@@ -1,6 +1,6 @@
 use std::io::{Read, Seek, Write};
 
-use smdiff_common::{Run, WindowHeader, MAX_INST_SIZE, MAX_WIN_SIZE, MICRO_MAX_INST_COUNT};
+use smdiff_common::{Format, Run, SectionHeader, MAX_INST_SIZE, MAX_WIN_SIZE};
 use smdiff_reader::{Op, SectionReader};
 
 
@@ -171,7 +171,7 @@ impl Stats {
 ///Memory consumption may be 2-4x the size of the encoded (uncompressed) patch.
 pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<SparseOp>, Stats)>{
     let mut output = Vec::new();
-    let mut reader = SectionReader::new(patch)?;
+    let mut reader = SectionReader::new(patch);
     let mut o_pos_start = 0;
     let mut stats = Stats::new();
     while let Ok(Some((insts,_output_size))) = reader.next() {
@@ -352,28 +352,14 @@ impl SummaryPatch{
     pub fn write<W:Write>(self,mut sink:W,max_win_size:Option<usize>)->std::io::Result<W>{
         //window needs to be MAX_INST_SIZE..=MAX_WIN_SIZE
         let max_win_size = max_win_size.unwrap_or(MAX_WIN_SIZE).min(MAX_WIN_SIZE).max(MAX_INST_SIZE);
-        //first figure out if this is a micro format or window format.
-        //if it's a micro format, we just write the instructions.
-        //if it's a window format, we need to figure out the windows.
-        let num_ops = self.0.len();
-        if num_ops <= MICRO_MAX_INST_COUNT{
-            //sum the oal of all instructions.
-            let mut oal_sum = 0;
-            for inst in self.0.iter(){
-                oal_sum += inst.oal() as u64;
-            }
-            if oal_sum <= max_win_size as u64{
-                let header = smdiff_common::FileHeader::new_micro(num_ops as u8);
-                smdiff_writer::write_file_header(&header, &mut sink)?;
-                smdiff_writer::write_micro_section(&self.0, &mut sink)?;
-                return Ok(sink);
-            }
-        }
-        //we need to write a window patch.
-        let header = smdiff_common::FileHeader::new_window();
-        smdiff_writer::write_file_header(&header, &mut sink)?;
-        for (ops,header) in make_op_windows(&self.0, max_win_size){
-            smdiff_writer::write_win_section(ops, header, &mut sink)?;
+        //TODO: allow for compression, and format selection.
+        let windows = make_op_windows(&self.0, max_win_size);
+        let len = windows.len();
+        for (win_num,(ops,mut header)) in windows.into_iter().enumerate(){
+            header.format = Format::Interleaved;
+            header.more_sections = win_num < len - 1;
+            smdiff_writer::write_section_header(&header, &mut sink)?;
+            smdiff_writer::write_ops(ops, &header, &mut sink)?;
         }
         Ok(sink)
     }
@@ -437,7 +423,7 @@ where
 
 }
 
-fn make_op_windows(ops: &[Op], max_win_size: usize) -> Vec<(&[Op],WindowHeader)> {
+fn make_op_windows(ops: &[Op], max_win_size: usize) -> Vec<(&[Op],SectionHeader)> {
     let max_win_size = max_win_size as u32;
     let mut result = Vec::new();
     let mut output_size = 0;
@@ -448,7 +434,7 @@ fn make_op_windows(ops: &[Op], max_win_size: usize) -> Vec<(&[Op],WindowHeader)>
         // Check if adding the current op exceeds the window size
         let op_size = op.oal() as u32;
         if output_size + op_size > max_win_size {
-            result.push((&ops[start_index..end_index],WindowHeader{ num_operations: (end_index-start_index) as u32, num_add_bytes, output_size}));
+            result.push((&ops[start_index..end_index],SectionHeader{ num_operations: (end_index-start_index) as u32, num_add_bytes, output_size, compression_algo: 0, format: Format::Interleaved, more_sections: true }));
             start_index = end_index;
             output_size = 0;
             num_add_bytes = 0;
@@ -460,7 +446,7 @@ fn make_op_windows(ops: &[Op], max_win_size: usize) -> Vec<(&[Op],WindowHeader)>
     }
 
     // Add the last group
-    result.push((&ops[start_index..],WindowHeader{ num_operations: (ops.len()-start_index) as u32, num_add_bytes, output_size}));
+    result.push((&ops[start_index..],SectionHeader{ num_operations: (ops.len()-start_index) as u32, num_add_bytes, output_size, compression_algo: 0, format: Format::Interleaved, more_sections: false }));
 
     result
 }
@@ -470,7 +456,7 @@ fn make_op_windows(ops: &[Op], max_win_size: usize) -> Vec<(&[Op],WindowHeader)>
 #[cfg(test)]
 mod test_super {
 
-    use smdiff_common::{Copy, CopySrc, FileHeader};
+    use smdiff_common::{Copy, CopySrc};
     use smdiff_decoder::apply_patch;
     use smdiff_reader::Add;
     use super::*;
@@ -500,22 +486,39 @@ mod test_super {
 
     We can then mix and match these patches and we should be able to reason about the outputs.
     */
-    const HDR:FileHeader = FileHeader{ compression_algo: 0, format: smdiff_common::Format::WindowFormat };
     use std::io::Cursor;
     fn copy_patch() -> Cursor<Vec<u8>> {
         let mut sink = Cursor::new(Vec::new());
-        smdiff_writer::write_file_header(&HDR, &mut sink).unwrap();
+        let header = SectionHeader {
+            num_operations:2,
+            num_add_bytes: 0,
+            output_size: 10,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: false,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 5}),
             Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 5}),
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:2, num_add_bytes: 0, output_size: 10 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
         sink.rewind().unwrap();
         sink
     }
     fn add_run_patch() -> Cursor<Vec<u8>> {
         let mut sink = Cursor::new(Vec::new());
-        smdiff_writer::write_file_header(&HDR, &mut sink).unwrap();
+        let header = SectionHeader {
+            num_operations:5,
+            num_add_bytes: 0,
+            output_size: 10,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: false,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Add(Add{bytes:b"A".to_vec()}),
             Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 2}),
@@ -523,13 +526,22 @@ mod test_super {
             Op::Add(Add{bytes:b"YZ".to_vec()}),
             Op::Copy(Copy { src: CopySrc::Dict, addr: 3, len: 2}),
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:5, num_add_bytes: 3, output_size: 10 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
         sink.rewind().unwrap();
         sink
     }
     fn complex_patch()->Cursor<Vec<u8>>{
         let mut sink = Cursor::new(Vec::new());
-        smdiff_writer::write_file_header(&HDR, &mut sink).unwrap();
+        let header = SectionHeader {
+            num_operations:5,
+            num_add_bytes: 0,
+            output_size: 10,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: false,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Add(Add{bytes:b"Y".to_vec()}),
             Op::Run(Run { byte: b'Z', len: 2}),
@@ -537,7 +549,7 @@ mod test_super {
             Op::Copy(Copy { src: CopySrc::Output, addr: 2, len: 2}),
             Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 4}),
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:5, num_add_bytes: 1, output_size: 10 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
         sink.rewind().unwrap();
         sink
     }
@@ -637,21 +649,52 @@ mod test_super {
         //we should use copy/seq excessively since add/run is simple in the code paths.
         let src = b"hello!";
         let mut sink = Cursor::new(Vec::new());
-        smdiff_writer::write_file_header(&HDR, &mut sink).unwrap();
+        let header = SectionHeader {
+            num_operations:1,
+            num_add_bytes: 0,
+            output_size: 5,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: true,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Copy(Copy { src: CopySrc::Dict, addr: 0, len: 5}),
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:1, num_add_bytes: 0, output_size: 5 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
+
+        let header = SectionHeader {
+            num_operations:3,
+            num_add_bytes: 0,
+            output_size: 6,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: true,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Add(Add{bytes:b" w".to_vec()}),
             Op::Copy(Copy { src: CopySrc::Output, addr: 4, len: 1}),
             Op::Add(Add{bytes:b"rld".to_vec()}),
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:3, num_add_bytes: 5, output_size: 6 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
+
+        let header = SectionHeader {
+            num_operations:1,
+            num_add_bytes: 0,
+            output_size: 1,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: false,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Copy(Copy { src: CopySrc::Dict, addr: 5, len: 1}),
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:1, num_add_bytes: 0, output_size: 1 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
         let p1 = sink.into_inner();
         let p1_answer = b"hello world!";
         let mut cursor = Cursor::new(p1.clone());
@@ -661,31 +704,74 @@ mod test_super {
         assert_eq!(output,p1_answer); //ensure our instructions do what we think they are.
         let patch_1 = Cursor::new(p1);
         let mut sink = Cursor::new(Vec::new());
-        smdiff_writer::write_file_header(&HDR, &mut sink).unwrap();
+
+        let header = SectionHeader {
+            num_operations:4,
+            num_add_bytes: 0,
+            output_size: 7,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: true,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Add(Add{bytes:b"H".to_vec()}),
             Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 4}), //ello
             Op::Copy(Copy { src: CopySrc::Dict, addr: 11, len: 1}), //'!'
             Op::Copy(Copy { src: CopySrc::Dict, addr: 5, len: 1}), //' '
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:4, num_add_bytes: 1, output_size: 7 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
+
+        let header = SectionHeader {
+            num_operations:4,
+            num_add_bytes: 0,
+            output_size: 14,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: true,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 7}), //'Hello! '
             Op::Copy(Copy { src: CopySrc::Output, addr: 7, len: 5}),  //'Hello'
             Op::Add(Add{bytes:b".".to_vec()}),
             Op::Copy(Copy { src: CopySrc::Output, addr: 13, len: 1}), // ' '
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:4, num_add_bytes: 1, output_size: 14 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
+
+        let header = SectionHeader {
+            num_operations:2,
+            num_add_bytes: 0,
+            output_size: 7,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: true,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Add(Add{bytes:b"h".to_vec()}),
             Op::Copy(Copy { src: CopySrc::Output, addr: 15, len: 6}),  //'ello. '
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:2, num_add_bytes: 1, output_size: 7 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
+
+        let header = SectionHeader {
+            num_operations:2,
+            num_add_bytes: 0,
+            output_size: 8,
+            compression_algo: 0,
+            format: Format::Interleaved,
+            more_sections: false,
+
+        };
+        smdiff_writer::write_section_header(&header, &mut sink).unwrap();
         let ops = &[
             Op::Copy(Copy { src: CopySrc::Output, addr: 21, len: 5}),  //'hello'
             Op::Run(Run { byte: b'.', len: 3}),
         ];
-        smdiff_writer::write_win_section(ops, WindowHeader { num_operations:2, num_add_bytes: 0, output_size: 8 }, &mut sink).unwrap();
+        smdiff_writer::write_ops(ops, &header,&mut sink).unwrap();
         let p2 = sink.into_inner();
         let p2_answer = b"Hello! Hello! Hello. hello. hello...";
         let mut cursor = Cursor::new(p2.clone());

@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use smdiff_common::{diff_addresses_to_u64, read_i_varint, read_u16, read_u8, read_u_varint, size_routine, AddOp, Copy, CopySrc, FileHeader, Format, Run, Size, WindowHeader, ADD, COPY_D, COPY_O, OP_MASK, RUN, SIZE_MASK};
+use smdiff_common::{diff_addresses_to_u64, read_i_varint, read_u16, read_u8, read_u_varint, size_routine, AddOp, Copy, CopySrc, Format, Run, Size, SectionHeader, ADD, COPY_D, COPY_O, OP_MASK, RUN, SIZE_MASK};
 
 
 
@@ -22,58 +22,46 @@ impl AddOp for Add{
     }
 }
 
-pub fn decode_file_header(header_byte: u8) -> FileHeader {
-    let compression_algo = header_byte & 0b00000011;
-    let format_bit = header_byte & 0b00000100;
-    let operations_bits = (header_byte & 0b1111_100) >> 3;
-
-    let format = if format_bit == 0 {
-        Format::MicroFormat{num_operations:operations_bits}
+pub fn read_section_header<R: std::io::Read>(reader: &mut R) -> std::io::Result<SectionHeader> {
+    let header_byte = read_u8(reader)?;
+    let compression_algo = (header_byte & 0b00111000) >> 3;
+    let format = if header_byte & 0b01000000 == 0b01000000{Format::Segregated} else {Format::Interleaved};
+    let more_sections = (header_byte & 0b1000_0000) == 0b1000_0000;
+    let num_operations = read_u_varint(reader)? as u32;
+    let num_add_bytes = if format.is_segregated() {
+        read_u_varint(reader)? as u32
     } else {
-        Format::WindowFormat
+        0
+    };
+    let read_size = read_u_varint(reader)? as u32;
+    let output_size = if format.is_segregated(){
+        num_add_bytes + read_size
+    }else{
+        read_size
     };
 
-    FileHeader {
+    Ok(SectionHeader {
         compression_algo,
         format,
-    }
-}
-pub fn read_file_header<R: std::io::Read>(reader: &mut R) -> std::io::Result<FileHeader> {
-    let header_byte = read_u8(reader)?;
-    Ok(decode_file_header(header_byte))
-}
-
-pub fn read_window_header<R: std::io::Read>(reader: &mut R) -> std::io::Result<WindowHeader> {
-    let num_operations = read_u_varint(reader)?;
-    let num_add_bytes = read_u_varint(reader)?;
-    let diff_encoded_output_size = read_u_varint(reader)?;
-    let output_size = num_add_bytes + diff_encoded_output_size;
-    //return err if output size is great MAX_WIN_SIZE
-    if output_size > smdiff_common::MAX_WIN_SIZE as u64 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Output size is greater than MAX_WIN_SIZE"));
-    }
-
-
-    Ok(WindowHeader {
-        num_operations: num_operations as u32,
-        output_size: output_size as u32,
-        num_add_bytes: num_add_bytes as u32,
+        more_sections,
+        num_operations,
+        num_add_bytes,
+        output_size,
     })
 }
 
-///Returns the ops and the output size
-pub fn read_section<R: std::io::Read>(reader: &mut R,header:FileHeader) -> std::io::Result<(Vec<Op>,usize)> {
+pub fn read_ops<R: std::io::Read>(reader: &mut R, header:&SectionHeader)-> std::io::Result<Vec<Op>>{
+    let SectionHeader { format, num_operations, output_size, .. } = header;
+    //dbg!(&header);
     let mut cur_d_addr = 0;
     let mut cur_o_addr = 0;
-    //dbg!(&header);
-    match header.format {
-        Format::WindowFormat => {
-            let WindowHeader { num_operations, output_size, ..  } = read_window_header(reader)?;
-            let mut output = Vec::with_capacity(num_operations as usize);
+    match format {
+        Format::Segregated => {
+            let mut output = Vec::with_capacity(*num_operations as usize);
             let mut add_idxs = Vec::new();
             let mut check_size = 0;
             //dbg!(num_operations,output_size,num_add_bytes);
-            for i in 0..num_operations {
+            for i in 0..*num_operations {
                 let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr,false)?;
                 check_size += op.oal() as u32;
                 if op.is_add(){
@@ -81,7 +69,7 @@ pub fn read_section<R: std::io::Read>(reader: &mut R,header:FileHeader) -> std::
                 }
                 output.push(op);
             }
-            if check_size != output_size{
+            if &check_size != output_size{
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Window Header output size: {} != Sum(ops.oal()) {}",output_size,check_size)));
             }
             //reader should be at the end of the instructions
@@ -92,19 +80,29 @@ pub fn read_section<R: std::io::Read>(reader: &mut R,header:FileHeader) -> std::
                     reader.read_exact(&mut add.bytes)?;
                 }
             }
-            Ok((output, output_size as usize))
+            Ok(output)
         },
-        Format::MicroFormat{num_operations} => {
-            let mut output = Vec::with_capacity(num_operations as usize);
-            let mut out_size = 0;
-            for _ in 0..num_operations {
+        Format::Interleaved => {
+            let mut output = Vec::with_capacity(*num_operations as usize);
+            let mut check_size = 0;
+            for _ in 0..*num_operations {
                 let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr,true)?;
-                out_size += op.oal() as u32;
+                check_size += op.oal() as u32;
                 output.push(op);
             }
-            Ok((output, out_size as usize))
+            if &check_size != output_size{
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Window Header output size: {} != Sum(ops.oal()) {}",output_size,check_size)));
+            }
+            Ok(output)
         }
     }
+}
+
+///Returns the ops and the output size. Cannot be compressed
+pub fn read_section<R: std::io::Read>(reader: &mut R) -> std::io::Result<(Vec<Op>,SectionHeader)> {
+    let header = read_section_header(reader)?;
+    let ops = read_ops(reader, &header)?;
+    Ok((ops,header))
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -171,26 +169,28 @@ fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut 
 
 pub struct SectionReader<R>{
     source: R,
-    header: FileHeader,
+    done:bool,
 }
 impl<R: Read> SectionReader<R>{
-    pub fn new(mut source: R) -> std::io::Result<Self> {
-        let header: FileHeader = read_file_header(&mut source)?;
-        Ok(Self {
+    pub fn new(source: R) -> Self {
+        Self {
             source,
-            header,
-        })
+            done:false,
+        }
     }
-    pub fn next(&mut self) -> std::io::Result<Option<(Vec<Op>,usize)>> {
-        let (ops,output_size) = match read_section(&mut self.source, self.header){
+    pub fn next(&mut self) -> std::io::Result<Option<(Vec<Op>,SectionHeader)>> {
+        if self.done{
+            return Ok(None);
+        }
+        let (ops,header) = match read_section(&mut self.source){
             Ok(v) => v,
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(None);
-            },
             Err(e) => return Err(e),
 
         };
-        Ok(Some((ops,output_size)))
+        if !header.more_sections{
+            self.done = true;
+        }
+        Ok(Some((ops,header)))
     }
     pub fn into_inner(self) -> R {
         self.source
@@ -204,35 +204,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_decode_microformat_header() {
-        // Example MicroFormat header byte (compression 0, MicroFormat, 10 operations)
-        let header_byte = 0b0000_1010;
-
-        let result = decode_file_header(header_byte);
-
-        let expected = FileHeader {
-            compression_algo: 0,
-            format: Format::MicroFormat { num_operations: 10 },
-        };
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_decode_windowformat_header() {
-        // Example WindowFormat header byte (compression 2, WindowFormat)
-        let header_byte = 0b0110_0000;
-
-        let result = decode_file_header(header_byte);
-
-        let expected = FileHeader {
-            compression_algo: 1,
-            format: Format::WindowFormat,
-        };
-
-        assert_eq!(result, expected);
-    }
 
     #[test]
     fn test_basic_add_run() {
@@ -242,9 +213,10 @@ mod tests {
             Op::Run(Run { byte: b'l', len: 2 }),
             Op::Add(Add::new("o".as_bytes().to_vec())),
         ];
-        let header = FileHeader { compression_algo: 0, format: Format::MicroFormat { num_operations: 3 } };
         let answer = vec![
-            3, // 0b00_0_00011
+            0, // 0b0_0_000_000
+            3, //num_ops uvarint
+            5, //output size uvarint
             130, //ADD, Size 2 0b10_000010
             104, //'h'
             101, //'e'
@@ -254,9 +226,7 @@ mod tests {
             111 //'o'
         ];
         let mut reader = Cursor::new(answer);
-        let read_header = read_file_header(&mut reader).unwrap();
-        assert_eq!(header, read_header);
-        for (op,answer) in read_section(&mut reader, read_header).unwrap().0.into_iter().zip(ops) {
+        for (op,answer) in read_section(&mut reader).unwrap().0.into_iter().zip(ops) {
             assert_eq!(op, answer);
         }
 
@@ -271,9 +241,10 @@ mod tests {
             Op::Add(Add::new("! ".as_bytes().to_vec())),
             Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }),
         ];
-        let header = FileHeader { compression_algo: 0, format: Format::MicroFormat { num_operations: 4 } };
         let answer = vec![
-            4, // 0b00_0_00!00
+            0, // 0b0_0_000_000
+            4, //num_ops uvarint
+            13, //output size uvarint
             129, //ADD, Size 1 0b10_000001
             72, //'H'
             4, //COPY_D, Size 4 0b00_000100
@@ -285,9 +256,7 @@ mod tests {
             0, //addr ivar int 0
         ];
         let mut reader = Cursor::new(answer);
-        let read_header = read_file_header(&mut reader).unwrap();
-        assert_eq!(header, read_header);
-        for (op,answer) in read_section(&mut reader, read_header).unwrap().0.into_iter().zip(ops) {
+        for (op,answer) in read_section(&mut reader).unwrap().0.into_iter().zip(ops) {
             assert_eq!(op, answer);
         }
     }
@@ -312,23 +281,23 @@ mod tests {
                 Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }),
             ]
         ];
-        let header = FileHeader { compression_algo: 0, format: Format::WindowFormat };
 
         let answer = vec![
-            32, //File Header 0b00_1_0000
-
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             1, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
             129, //ADD, Size 1 0b10_000001
             72, //'H'
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             4, //Output size uvarint diff encoded from add uvarint
             4, //COPY_D, Size 4 0b00_000100
             2, //addr ivar int +1
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             2, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
@@ -336,6 +305,7 @@ mod tests {
             33, //'!'
             32, //' '
 
+            64, // 0b0_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             6, //Output size uvarint diff encoded from add uvarint
@@ -343,10 +313,8 @@ mod tests {
             0, //addr ivar int 0
         ];
         let mut reader = Cursor::new(answer);
-        let read_header = read_file_header(&mut reader).unwrap();
-        assert_eq!(header, read_header);
         for i in 0..4{
-            let (read_ops,_) = read_section(&mut reader, read_header).unwrap();
+            let (read_ops,_) = read_section(&mut reader).unwrap();
             for (op,answer) in read_ops.into_iter().zip(ops[i].clone()) {
                 assert_eq!(op, answer);
             }
@@ -384,23 +352,23 @@ mod tests {
                 Op::Run(Run { byte: b'.', len: 3 }),
             ],
         ];
-        let header = FileHeader { compression_algo: 0, format: Format::WindowFormat };
 
         let answer = vec![
-            32, //File Header 0b00_1_0000
-
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             1, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
             129, //ADD, Size 1 0b10_000001
             72, //'H'
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             4, //Output size uvarint diff encoded from add uvarint
             4, //COPY_D, Size 4 0b00_000100
             2, //addr ivar int +1
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             2, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
@@ -408,18 +376,21 @@ mod tests {
             33, //'!'
             32, //' '
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             6, //Output size uvarint diff encoded from add uvarint
             70, //COPY_O, Size 6 0b01_000110
             0, //addr ivar int 0
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             4, //Output size uvarint diff encoded from add uvarint
             68, //COPY_O, Size 4 0b01_000100
             12, //addr ivar int +6
 
+            64, // 0b0_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             3, //Output size uvarint diff encoded from add uvarint
@@ -428,10 +399,8 @@ mod tests {
         ];
 
         let mut reader = Cursor::new(answer);
-        let read_header = read_file_header(&mut reader).unwrap();
-        assert_eq!(header, read_header);
         for i in 0..6{
-            let (read_ops,_) = read_section(&mut reader, read_header).unwrap();
+            let (read_ops,_) = read_section(&mut reader).unwrap();
             for (op,answer) in read_ops.into_iter().zip(ops[i].clone()) {
                 assert_eq!(op, answer);
             }

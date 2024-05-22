@@ -4,7 +4,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 use std::time::Instant;
 
-use smdiff_reader::{read_section, SectionReader};
+use smdiff_reader::{read_ops, read_section, SectionReader};
 
 use crate::{Stats, DIR_PATH};
 use colored::*;
@@ -18,7 +18,7 @@ pub fn vc_analysis()-> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
     smdiff_vcdiff::convert_vcdiff_to_smdiff(&mut reader, &mut converted_a)?;
     let sm_patch = Cursor::new(converted_a);
-    let mut reader = SectionReader::new(sm_patch)?;
+    let mut reader = SectionReader::new(sm_patch);
     while let Ok(Some((ops,_))) = reader.next(){
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
@@ -171,11 +171,11 @@ pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
 
     println!("{:?}", converted_c);
     let mut reader = Cursor::new(converted_c);
-    let header = smdiff_reader::read_file_header(&mut reader)?;
-    let (ops,output_size) = read_section(&mut reader,header)?;
+    let header = smdiff_reader::read_section_header(&mut reader)?;
+    let ops = read_ops(&mut reader,&header)?;
     for op in ops {
         println!("{:?}", op);
     }
-    println!("output_size {:?}", output_size);
+    println!("output_size {:?}", header.output_size);
     Ok(())
 }

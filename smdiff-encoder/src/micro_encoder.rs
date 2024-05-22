@@ -1,15 +1,15 @@
 
 
-use smdiff_common::{Copy, CopySrc, Run, WindowHeader, MAX_WIN_SIZE};
+use smdiff_common::{Copy, CopySrc, Format, Run, SectionHeader, MAX_WIN_SIZE};
 
 use crate::{add::{make_add_runs, make_adds}, hash::{find_substring_in_src, find_substring_in_trgt, ChunkHashMap, HashCursor, MULTIPLICATVE}, run::handle_run, CopyScore, Op};
 
 
 
-pub fn encode_one_section<'a>(src_dict: &ChunkHashMap, trgt_dict: &ChunkHashMap, src_bytes:&[u8], target: &'a [u8], hash_size:usize) -> (WindowHeader,Vec<Op<'a>>){
+pub fn encode_one_section<'a>(src_dict: &ChunkHashMap, trgt_dict: &ChunkHashMap, src_bytes:&[u8], target: &'a [u8], hash_size:usize) -> (SectionHeader,Vec<Op<'a>>){
     assert!(target.len() <= MAX_WIN_SIZE);
     if target.is_empty(){
-        return (WindowHeader{ num_operations: 0, num_add_bytes: 0, output_size: 0 },Vec::new());
+        return (SectionHeader{ num_operations: 0, num_add_bytes: 0, output_size: 0, compression_algo: 0, format: Format::Interleaved, more_sections: false },Vec::new());
     }
     // let mut src_scanner = Scanner::new(&src_bytes);
     // let mut trgt_scanner = if match_trgt{Scanner::new(&target)}else{Scanner::new(&[])};
@@ -125,10 +125,14 @@ pub fn encode_one_section<'a>(src_dict: &ChunkHashMap, trgt_dict: &ChunkHashMap,
         rel_o = max_end_pos;
     }
 
-    let header = WindowHeader{
+    let header = SectionHeader{
         num_operations: ops.len() as u32,
         output_size: rel_o as u32,
         num_add_bytes: add_bytes as u32,
+        compression_algo: 0,
+        format: Format::Interleaved,
+        more_sections: false,
+
     };
     (header,ops)
 }

@@ -5,6 +5,7 @@ mod size_tests;
 mod vc_to_sm;
 mod merge_test;
 
+use smdiff_common::Format;
 // use params::*;
 use vc_to_sm::*;
 use size_tests::*;
@@ -24,12 +25,17 @@ const _URLS: [&str; 6] = [
     "https://mirrors.concertpass.com/gcc/releases/gcc-2.95.1/gcc-2.95.3.tar.gz",
 ];
 fn main()-> Result<(), Box<dyn std::error::Error>> {
+    // TESTS
     merge_2951_2952_2953()?;
-    encode_test_gcc_2951_2952()?;
-    encode_test_gcc_2952_2953()?;
+    let sec_comp = true;
+    let format = Format::Interleaved;
+    encode_test_gcc_2951_2952(sec_comp,format)?;
+    encode_test_gcc_2952_2953(sec_comp,format)?;
     encode_test_micro()?;
     encode_test_small()?;
     encode_test_large()?;
+
+    // ANALYSIS
     //vc_to_sm_test()?;
     // vc_analysis()?;
     Ok(())

@@ -1,7 +1,7 @@
 
 use std::io::{Read,Seek,Write};
 
-use smdiff_reader::read_section;
+use smdiff_reader::read_ops;
 
 ///Applies a SMDiff patch to a source buffer
 /// # Arguments
@@ -13,22 +13,37 @@ use smdiff_reader::read_section;
 pub fn apply_patch<P:Read,R:Read+Seek,W:Write>(patch:&mut P,mut src:Option<&mut R>,sink:&mut W) -> std::io::Result<()> {
     //to avoid the Read+Seek bound on sink,
     //we need to scan the whole patch file so we can cache the TargetSourced windows
-    let header: smdiff_common::FileHeader = smdiff_reader::read_file_header(patch)?;
     let mut cur_o = Vec::new();
     let mut cur_o_pos = 0;
     //let mut stats = Stats::default();
+    let mut win_data = Vec::new();
     loop {
-        let (ops,out_size) = match read_section(patch, header) {
-            Ok(a) => a,
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof) => {
-                break;
+        let header = smdiff_reader::read_section_header(patch)?;
+        let ops = if header.compression_algo == 1 {
+            apply_patch::<_,R,_>(patch, None, &mut win_data)?;
+            let mut crsr = std::io::Cursor::new(&win_data);
+            match read_ops(&mut crsr, &header) {
+                Ok(a) => a,
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof) => {
+                    break;
+                }
+                Err(e) => {
+                    return Err(e);
+                },
             }
-            Err(e) => {
-                dbg!(&e);
-                return Err(e);
-            },
+        }else{
+            match read_ops(patch, &header) {
+                Ok(a) => a,
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::UnexpectedEof) => {
+                    break;
+                }
+                Err(e) => {
+                    dbg!(&e);
+                    return Err(e);
+                },
+            }
         };
-        //dbg!(ops.len(),out_size);
+        let out_size = header.output_size as usize;
         cur_o.reserve_exact(out_size);
         cur_o.resize(cur_o.len() + out_size, 0);
         for op in ops {
@@ -65,6 +80,10 @@ pub fn apply_patch<P:Read,R:Read+Seek,W:Write>(patch:&mut P,mut src:Option<&mut 
                 },
             }
         }
+        if !header.more_sections{
+            break;
+        }
+        win_data.clear();
     }
     sink.write_all(&cur_o)?;
     Ok(())

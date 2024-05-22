@@ -1,7 +1,7 @@
 use std::io::Seek;
 
-use smdiff_common::{AddOp, Copy, CopySrc, Run, WindowHeader, MAX_RUN_LEN, MAX_WIN_SIZE, MICRO_MAX_INST_COUNT};
-use smdiff_writer::{write_file_header, write_micro_section, write_win_section};
+use smdiff_common::{AddOp, Copy, CopySrc, Format, Run, SectionHeader, MAX_RUN_LEN, MAX_WIN_SIZE};
+use smdiff_writer::{write_section_header, write_ops};
 use vcdiff_common::{CopyType, Inst, Instruction, WinIndicator, ADD, RUN};
 use vcdiff_reader::{VCDReader, VCDiffReadMsg};
 
@@ -27,7 +27,6 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
     let mut cur_o_pos = 0;
     let mut cur_win_size = 0;
     let mut num_add_bytes = 0;
-    let mut file_header = None;
     loop{
         match reader.next()?{
             VCDiffReadMsg::WindowSummary(ws) => {
@@ -51,11 +50,17 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
                                 let remaining = total - processed;
                                 let chunk_size = remaining.min(MAX_INST_SIZE);
                                 if cur_win_size + chunk_size > MAX_WIN_SIZE as u32{
-                                    if file_header.is_none(){
-                                        file_header = Some(smdiff_common::FileHeader{ compression_algo: 0, format: smdiff_common::Format::WindowFormat });
-                                        smdiff_writer::write_file_header(&file_header.unwrap(),&mut writer)?;
-                                    }
-                                    write_win_section(&cur_win, WindowHeader{ num_operations: cur_win.len() as u32, num_add_bytes, output_size:cur_win_size },&mut writer)?;
+                                    let header = SectionHeader {
+                                        num_operations:cur_win.len() as u32,
+                                        num_add_bytes,
+                                        output_size:cur_win_size,
+                                        compression_algo: 0,
+                                        format: Format::Interleaved,
+                                        more_sections: true,
+
+                                    };
+                                    write_section_header(&header,&mut writer)?;
+                                    write_ops(&cur_win, &header,&mut writer)?;
                                     cur_win.clear();
                                     cur_win_size = 0;
                                     num_add_bytes = 0;
@@ -78,11 +83,17 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
                                 let remaining = total - processed;
                                 let chunk_size = remaining.min(MAX_RUN_LEN as u32);
                                 if cur_win_size + chunk_size > MAX_WIN_SIZE as u32{
-                                    if file_header.is_none(){
-                                        file_header = Some(smdiff_common::FileHeader{ compression_algo: 0, format: smdiff_common::Format::WindowFormat });
-                                        smdiff_writer::write_file_header(&file_header.unwrap(),&mut writer)?;
-                                    }
-                                    write_win_section(&cur_win, WindowHeader{ num_operations: cur_win.len() as u32, num_add_bytes, output_size:cur_win_size },&mut writer)?;
+                                    let header = SectionHeader {
+                                        num_operations:cur_win.len() as u32,
+                                        num_add_bytes,
+                                        output_size:cur_win_size,
+                                        compression_algo: 0,
+                                        format: Format::Interleaved,
+                                        more_sections: true,
+
+                                    };
+                                    write_section_header(&header,&mut writer)?;
+                                    write_ops(&cur_win, &header,&mut writer)?;
                                     cur_win.clear();
                                     cur_win_size = 0;
                                     num_add_bytes = 0;
@@ -124,11 +135,17 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
                                     let chunk_size = remaining.min(slice_len);
                                     dbg!(slice_len,chunk_size);
                                     if cur_win_size + chunk_size > MAX_WIN_SIZE as u32{
-                                        if file_header.is_none(){
-                                            file_header = Some(smdiff_common::FileHeader{ compression_algo: 0, format: smdiff_common::Format::WindowFormat });
-                                            smdiff_writer::write_file_header(&file_header.unwrap(),&mut writer)?;
-                                        }
-                                        write_win_section(&cur_win, WindowHeader{ num_operations: cur_win.len() as u32, num_add_bytes, output_size:cur_win_size },&mut writer)?;
+                                        let header = SectionHeader {
+                                            num_operations:cur_win.len() as u32,
+                                            num_add_bytes,
+                                            output_size:cur_win_size,
+                                            compression_algo: 0,
+                                            format: Format::Interleaved,
+                                            more_sections: true,
+
+                                        };
+                                        write_section_header(&header,&mut writer)?;
+                                        write_ops(&cur_win, &header,&mut writer)?;
                                         cur_win.clear();
                                         cur_win_size = 0;
                                         num_add_bytes = 0;
@@ -147,11 +164,17 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
                                     let remaining = total - processed;
                                     let chunk_size = MAX_INST_SIZE.min(remaining);
                                     if cur_win_size + chunk_size > MAX_WIN_SIZE as u32{
-                                        if file_header.is_none(){
-                                            file_header = Some(smdiff_common::FileHeader{ compression_algo: 0, format: smdiff_common::Format::WindowFormat });
-                                            smdiff_writer::write_file_header(&file_header.unwrap(),&mut writer)?;
-                                        }
-                                        write_win_section(&cur_win, WindowHeader{ num_operations: cur_win.len() as u32, num_add_bytes, output_size:cur_win_size },&mut writer)?;
+                                        let header = SectionHeader {
+                                            num_operations:cur_win.len() as u32,
+                                            num_add_bytes,
+                                            output_size:cur_win_size,
+                                            compression_algo: 0,
+                                            format: Format::Interleaved,
+                                            more_sections: true,
+
+                                        };
+                                        write_section_header(&header,&mut writer)?;
+                                        write_ops(&cur_win, &header,&mut writer)?;
                                         cur_win.clear();
                                         cur_win_size = 0;
                                         num_add_bytes = 0;
@@ -176,17 +199,19 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
             VCDiffReadMsg::EndOfFile => break,
         }
     }
-    dbg!(cur_o_pos,file_header);
+    dbg!(cur_o_pos);
     //now we determine what we need to write
-    if file_header.is_none() && cur_win.len() <= MICRO_MAX_INST_COUNT{
-        write_file_header(&smdiff_common::FileHeader{ compression_algo: 0, format: smdiff_common::Format::MicroFormat{ num_operations: cur_win.len() as u8 } },&mut writer)?;
-        write_micro_section(&cur_win,&mut writer)?;
-    }else{
-        if file_header.is_none(){
-            smdiff_writer::write_file_header(&smdiff_common::FileHeader{ compression_algo: 0, format: smdiff_common::Format::WindowFormat },&mut writer)?;
-        }
-        write_win_section(&cur_win, WindowHeader{ num_operations: cur_win.len() as u32, num_add_bytes, output_size:cur_win_size },&mut writer)?;
-    }
+    let header = SectionHeader {
+        num_operations:cur_win.len() as u32,
+        num_add_bytes,
+        output_size:cur_win_size,
+        compression_algo: 0,
+        format: Format::Interleaved,
+        more_sections: false,
+
+    };
+    write_section_header(&header,&mut writer)?;
+    write_ops(&cur_win, &header,&mut writer)?;
     Ok(())
 }
 

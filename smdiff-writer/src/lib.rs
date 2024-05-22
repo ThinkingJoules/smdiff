@@ -1,44 +1,30 @@
 
-use smdiff_common::{diff_addresses_to_i64, size_routine, write_i_varint, write_u16, write_u8, write_u_varint, AddOp, Copy, CopySrc, FileHeader, Format, Op, Size, WindowHeader, MAX_WIN_SIZE, SIZE_MASK};
+use smdiff_common::{diff_addresses_to_i64, size_routine, write_i_varint, write_u16, write_u8, write_u_varint, AddOp, Copy, CopySrc, Format, Op, Size, SectionHeader, MAX_WIN_SIZE, SIZE_MASK};
 
 
 
-pub fn write_file_header<W: std::io::Write>(header: &FileHeader, writer:&mut W) -> std::io::Result<()> {
-    let mut header_byte = header.compression_algo;
-    if let Format::MicroFormat { num_operations } = header.format {
-        header_byte |= num_operations << 3;
-    }else{
-        header_byte |= 0b00000100;  // Set format bit
+pub fn write_section_header<W: std::io::Write>(header: &SectionHeader, writer:&mut W) -> std::io::Result<()> {
+    let mut cntl_byte = header.compression_algo << 3;
+    if let Format::Segregated = header.format {
+        cntl_byte |= 0b0100_0000;  // Set format bit
     }
-    write_u8(writer, header_byte)
-}
-
-pub fn write_window_header<W: std::io::Write>(header: &WindowHeader, writer:&mut W) -> std::io::Result<()> {
+    if header.more_sections{
+        cntl_byte |= 0b1000_0000; // Set continuation bit
+    }
+    write_u8(writer, cntl_byte)?;
     write_u_varint(writer, header.num_operations as u64)?;
-    write_u_varint(writer, header.num_add_bytes as u64)?;
-    let diff_encoded_output_size = header.output_size - header.num_add_bytes;
-    write_u_varint(writer, diff_encoded_output_size as u64)?;
+    let output_size = if header.format == Format::Segregated {
+        write_u_varint(writer, header.num_add_bytes as u64)?;
+        header.output_size - header.num_add_bytes
+    } else {
+        header.output_size
+    };
+    write_u_varint(writer, output_size as u64)?;
     Ok(())
 }
 
 
-pub fn write_micro_section<W: std::io::Write,A:AddOp>(ops: &[Op<A>], writer: &mut W) -> std::io::Result<()> {
-    if ops.len() > 31 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "MicroFormat must have 31 or fewer operations"));
-    }
-    let mut cur_d_addr = 0;
-    let mut cur_o_addr = 0;
-    for op in ops {
-        write_op_byte_and_size(writer, &op)?;
-        write_op_addtl(writer, &op, &mut cur_d_addr, &mut cur_o_addr)?;
-    }
-    if cur_o_addr > MAX_WIN_SIZE as u64 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Output size is greater than MAX_WIN_SIZE"));
-    }
-    Ok(())
-}
-/// Writes the window header and then the ops to the writer
-pub fn write_win_section<W: std::io::Write,A:AddOp>(ops: &[Op<A>], header:WindowHeader, writer: &mut W) -> std::io::Result<()> {
+pub fn write_ops<W: std::io::Write,A:AddOp>(ops: &[Op<A>], header:&SectionHeader, writer: &mut W) -> std::io::Result<()> {
     // if output size is > MAX_WIN_SIZE, return error
     if header.output_size as usize > MAX_WIN_SIZE{
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Output size is greater than MAX_WIN_SIZE"));
@@ -46,8 +32,6 @@ pub fn write_win_section<W: std::io::Write,A:AddOp>(ops: &[Op<A>], header:Window
     if ops.len() != header.num_operations as usize {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Number of operations does not match header"));
     }
-    write_window_header(&header, writer)?;
-
     let mut last_d_addr = 0;
     let mut last_o_addr = 0;
     let mut total_content_len = 0;
@@ -56,20 +40,27 @@ pub fn write_win_section<W: std::io::Write,A:AddOp>(ops: &[Op<A>], header:Window
     for op in ops {
         total_content_len += op.oal() as usize;
         write_op_byte_and_size(writer, &op)?;
-        match op {
-            Op::Add(a) => {
-                let slice = a.bytes();
-                add_bytes_written += slice.len();
-                add_bytes_slices.push(slice)
+        match header.format{
+            Format::Interleaved => write_op_addtl(writer, &op, &mut last_d_addr, &mut last_o_addr)?,
+            Format::Segregated => {
+                match op {
+                    Op::Add(a) => {
+                        let slice = a.bytes();
+                        add_bytes_written += slice.len();
+                        add_bytes_slices.push(slice)
+                    },
+                    a => write_op_addtl(writer, a, &mut last_d_addr, &mut last_o_addr)?,
+                }
             },
-            a => write_op_addtl(writer, a, &mut last_d_addr, &mut last_o_addr)?,
         }
     }
-    for slice in add_bytes_slices {
-        writer.write_all(slice)?;
-    }
-    if add_bytes_written != header.num_add_bytes as usize{
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Number of add bytes does not match header"));
+    if header.format == Format::Segregated {
+        for slice in add_bytes_slices {
+            writer.write_all(slice)?;
+        }
+        if add_bytes_written != header.num_add_bytes as usize{
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Number of add bytes does not match header"));
+        }
     }
     if total_content_len as usize != header.output_size as usize {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Total content length {} does not match output size {}", total_content_len, header.output_size)));
@@ -146,13 +137,15 @@ mod test_super {
             Op::Run(Run { byte: b'l', len: 2 }),
             Op::Add(Add::new("o".as_bytes().to_vec())),
         ];
-        let header = FileHeader { compression_algo: 0, format: Format::MicroFormat { num_operations: 3 } };
+        let header = SectionHeader { compression_algo: 0, format: Format::Interleaved , num_operations: 3 , num_add_bytes: 3, output_size: 5 , more_sections:false};
         let mut writer = Vec::new();
-        write_file_header(&header, &mut writer).unwrap();
-        write_micro_section(&ops, &mut writer).unwrap();
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&ops, &header,&mut writer).unwrap();
 
         let answer = vec![
-            3, // 0b00_0_00011
+            0, // 0b0_0_000_000
+            3, //num_ops uvarint
+            5, //output size uvarint
             130, //ADD, Size 2 0b10_000010
             104, //'h'
             101, //'e'
@@ -174,12 +167,14 @@ mod test_super {
             Op::Add(Add::new("! ".as_bytes().to_vec())),
             Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }),
         ];
-        let header = FileHeader { compression_algo: 0, format: Format::MicroFormat { num_operations: 4 } };
+        let header = SectionHeader { compression_algo: 0, format: Format::Interleaved  , num_operations: 4 , num_add_bytes: 3, output_size: 13 , more_sections:false };
         let mut writer = Vec::new();
-        write_file_header(&header, &mut writer).unwrap();
-        write_micro_section(&ops, &mut writer).unwrap();
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&ops, &header,&mut writer).unwrap();
         let answer = vec![
-            4, // 0b00_0_00!00
+            0, // 0b0_0_000_000
+            4, //num_ops uvarint
+            13, //output size uvarint
             129, //ADD, Size 1 0b10_000001
             72, //'H'
             4, //COPY_D, Size 4 0b00_000100
@@ -199,44 +194,77 @@ mod test_super {
         //we encode just the Add(H) in the Neither window
         //then we encode the COPY(ello) in the Src window
         //then we encode the Copy(Hello!) in the Target window
-        let header = FileHeader { compression_algo: 0, format: Format::WindowFormat };
         let mut writer = Vec::new();
-        write_file_header(&header, &mut writer).unwrap();
         let win_ops: Vec<Op<Add>>= vec![
             Op::Add(Add::new("H".as_bytes().to_vec())),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 1, output_size: 1 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 1,
+            output_size: 1 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
 
         let win_ops: Vec<Op<Add>>= vec![
             Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 4 }),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 0, output_size: 4 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 0,
+            output_size: 4 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
 
         let win_ops: Vec<Op<Add>>= vec![
             Op::Add(Add::new("! ".as_bytes().to_vec())),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 2, output_size: 2 }, &mut writer).unwrap();
-
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 2,
+            output_size: 2 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
         let win_ops: Vec<Op<Add>>= vec![
             Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 0, output_size: 6 }, &mut writer).unwrap();
-
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 0,
+            output_size: 6 ,
+            more_sections:false
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
         let answer = vec![
-            32, //File Header 0b00_1_0000
-
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             1, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
             129, //ADD, Size 1 0b10_000001
             72, //'H'
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             4, //Output size uvarint diff encoded from add uvarint
             4, //COPY_D, Size 4 0b00_000100
             2, //addr ivar int +1
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             2, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
@@ -244,6 +272,7 @@ mod test_super {
             33, //'!'
             32, //' '
 
+            64, // 0b0_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             6, //Output size uvarint diff encoded from add uvarint
@@ -265,55 +294,109 @@ mod test_super {
         //then we encode the Copy(Hell) in the Target window, referencing the last window
         //then we encode the Add('.') in the Target window
         //then we encode an implicit Copy For the last '..' chars.
-        let header = FileHeader { compression_algo: 0, format: Format::WindowFormat };
         let mut writer = Vec::new();
-        write_file_header(&header, &mut writer).unwrap();
         let win_ops: Vec<Op<Add>>= vec![
             Op::Add(Add::new("H".as_bytes().to_vec())),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 1, output_size: 1 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 1,
+            output_size: 1 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
 
         let win_ops: Vec<Op<Add>>= vec![
             Op::Copy(Copy { src: CopySrc::Dict, addr: 1, len: 4 }),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 0, output_size: 4 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 0,
+            output_size: 4 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
 
         let win_ops: Vec<Op<Add>>= vec![
             Op::Add(Add::new("! ".as_bytes().to_vec())),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 2, output_size: 2 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 2,
+            output_size: 2 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
 
         let win_ops: Vec<Op<Add>>= vec![
             Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 0, output_size: 6 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 0,
+            output_size: 6 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
 
         let win_ops: Vec<Op<Add>>= vec![
             Op::Copy(Copy { src: CopySrc::Output, addr: 6, len: 4 }),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 0, output_size: 4 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 0,
+            output_size: 4 ,
+            more_sections:true
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
 
         let win_ops: Vec<Op<Add>>= vec![
             Op::Run(Run { byte: b'.', len: 3 }),
         ];
-        write_win_section(&win_ops, WindowHeader { num_operations: 1, num_add_bytes: 0, output_size: 3 }, &mut writer).unwrap();
+        let header = SectionHeader {
+            compression_algo: 0,
+            format: Format::Segregated ,
+            num_operations: 1 ,
+            num_add_bytes: 0,
+            output_size: 3 ,
+            more_sections:false
+        };
+        write_section_header(&header, &mut writer).unwrap();
+        write_ops(&win_ops, &header,&mut writer).unwrap();
+
 
         //dbg!(&w);
         let answer = vec![
-            32, //File Header 0b00_1_0000
-
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             1, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
             129, //ADD, Size 1 0b10_000001
             72, //'H'
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             4, //Output size uvarint diff encoded from add uvarint
             4, //COPY_D, Size 4 0b00_000100
             2, //addr ivar int +1
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             2, //Num add bytes uvarint
             0, //Output size uvarint diff encoded from add uvarint
@@ -321,18 +404,21 @@ mod test_super {
             33, //'!'
             32, //' '
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             6, //Output size uvarint diff encoded from add uvarint
             70, //COPY_O, Size 6 0b01_000110
             0, //addr ivar int 0
 
+            192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             4, //Output size uvarint diff encoded from add uvarint
             68, //COPY_O, Size 4 0b01_000100
             12, //addr ivar int +6
 
+            64, // 0b0_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
             3, //Output size uvarint diff encoded from add uvarint

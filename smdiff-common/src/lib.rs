@@ -12,57 +12,40 @@ pub const MAX_RUN_LEN:u8 = 62;
 pub const MAX_INST_SIZE:usize = u16::MAX as usize;
 ///Inclusive Upper Bound
 pub const MAX_WIN_SIZE:usize = (1<<24) - 1; // 16MB
-///Inclusive Upper Bound
-pub const MICRO_MAX_INST_COUNT:usize = 31;
+
 #[derive(Copy,Clone,Debug, PartialEq)]
 pub enum Format {
-    MicroFormat{num_operations: u8},
-    WindowFormat,
+    Interleaved,
+    Segregated,
 }
 
 impl Format {
-    pub fn is_micro(&self) -> bool {
-        matches!(self, Format::MicroFormat{..})
+    pub fn is_interleaved(&self) -> bool {
+        matches!(self, Format::Interleaved{..})
     }
-    pub fn is_window(&self) -> bool {
-        matches!(self, Format::WindowFormat)
+    pub fn is_segregated(&self) -> bool {
+        matches!(self, Format::Segregated)
     }
 }
-
 #[derive(Copy,Clone,Debug, PartialEq)]
-pub struct FileHeader {
+pub struct SectionHeader {
     pub compression_algo: u8,
     pub format: Format,
-}
-
-impl FileHeader {
-    pub fn new_micro(num_operations: u8) -> Self {
-        Self {
-            compression_algo: 0,
-            format: Format::MicroFormat{num_operations},
-        }
-    }
-    pub fn new_window() -> Self {
-        Self {
-            compression_algo: 0,
-            format: Format::WindowFormat,
-        }
-    }
-    pub fn is_compressed(&self) -> bool {
-        self.compression_algo != 0
-    }
-    pub fn is_micro(&self) -> bool {
-        self.format.is_micro()
-    }
-}
-
-#[derive(Copy,Clone,Debug, PartialEq)]
-pub struct WindowHeader {
+    pub more_sections: bool,
     pub num_operations: u32,
     ///Total Add bytes at end of window
     pub num_add_bytes: u32,
     ///Total output size of window operations
     pub output_size: u32,
+}
+
+impl SectionHeader {
+    pub fn is_compressed(&self) -> bool {
+        self.compression_algo != 0
+    }
+    pub fn is_interleaved(&self) -> bool {
+        self.format.is_interleaved()
+    }
 }
 
 pub trait AddOp{
