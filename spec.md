@@ -121,7 +121,7 @@ The first byte in the header is a byte with info about the format of the section
 | Bit(s) | Field               | Description        |
 | ----- | ------------------- | -------------------- |
 | 0-2   | Unused    |  N/A |
-| 3-5   | Compression Algo    | 0 = None, 1 = Smdiff Compress, 2 = zstd, 3 = lzma2_xz, 4-7 = unspecified
+| 3-5   | Compression Algo    | 0 = None, 1 = Smdiff Compress, 2 = zstd, 3 = brotli, 4-7 = unspecified
 | 6     | Format              | 0 = Interleaved, 1 = Segregated Adds  |
 | 7     | Continuation Bit    | 0 = Terminal Section, 1 = More Sections Follow |
 
@@ -259,10 +259,10 @@ Original Table with Smdiff comparisons
 5. Vcdiff-d         -              100,971     26,383,849
 6. Vcdiff-dc        -               97,246     14,461,203
 7. Vcdiff-dcw       -              256,445      1,248,543
-8. Smdiff           -           15,827,696     15,815,017
-9. Smdiff-d         -               96,652        451,818
+8. Smdiff           -           15,827,696     15,815,007
+9. Smdiff-d         -               96,647        451,809
 10.Smdiff-dc        -                  N/A            N/A
-11.Smdiff-dcw       -               86,309        251,370
+11.Smdiff-dcw       -               86,304        251,370
 ```
 It is probably really only fair to compare the 'compress only' (Vcdiff & Smdiff). As noted, my test encoder is a (nearly) 'perfect' encoder.
 

@@ -20,7 +20,7 @@ use crate::{add::{make_add_runs, make_adds}, hash::{find_sub_string_in_src, find
 //Use with full src or trgt dict only
 pub fn encode_window<'a>(src_dict: &[ChunkHashMap], trgt_dict: &[ChunkHashMap], src_bytes:&[u8], target: &'a [u8], window_range:Range<usize>,hash_size:usize,max_copy_step_size:u8) -> (SectionHeader,Vec<Op<'a>>){
     if target.is_empty(){
-        return (SectionHeader{ num_operations: 0, num_add_bytes: 0, output_size: 0, compression_algo: 0, format: Format::Interleaved, more_sections: false },Vec::new());
+        return (SectionHeader::default(),Vec::new());
     }
     let win_size = window_range.end - window_range.start;
     assert!(win_size <= MAX_WIN_SIZE);

@@ -13,10 +13,15 @@ pub const MAX_INST_SIZE:usize = u16::MAX as usize;
 ///Inclusive Upper Bound
 pub const MAX_WIN_SIZE:usize = (1<<24) - 1; // 16MB
 
-#[derive(Copy,Clone,Debug, PartialEq)]
+#[derive(Copy,Clone,Debug, PartialEq, Eq)]
 pub enum Format {
     Interleaved,
     Segregated,
+}
+impl Default for Format {
+    fn default() -> Self {
+        Format::Interleaved
+    }
 }
 
 impl Format {
@@ -27,7 +32,7 @@ impl Format {
         matches!(self, Format::Segregated)
     }
 }
-#[derive(Copy,Clone,Debug, PartialEq)]
+#[derive(Copy,Clone,Debug,Default, PartialEq)]
 pub struct SectionHeader {
     pub compression_algo: u8,
     pub format: Format,
@@ -40,6 +45,22 @@ pub struct SectionHeader {
 }
 
 impl SectionHeader {
+    pub fn new(num_operations: u32, num_add_bytes: u32, output_size: u32) -> Self {
+        Self { num_operations, num_add_bytes, output_size, ..Default::default() }
+    }
+    pub fn set_compression_algo(mut self, compression_algo: u8) -> Self {
+        self.compression_algo = compression_algo;
+        self
+    }
+    pub fn set_format(mut self, format: Format) -> Self {
+        self.format = format;
+        self
+    }
+    pub fn set_more_sections(mut self, more_sections: bool) -> Self {
+        self.more_sections = more_sections;
+        self
+    }
+
     pub fn is_compressed(&self) -> bool {
         self.compression_algo != 0
     }

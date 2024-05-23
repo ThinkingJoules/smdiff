@@ -346,7 +346,7 @@ mod tests {
                 Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 6 }),
             ],
             vec![
-                Op::Copy(Copy { src: CopySrc::Output, addr: 6, len: 4 }),
+                Op::Copy(Copy { src: CopySrc::Output, addr: 6, len: 5 }),
             ],
             vec![
                 Op::Run(Run { byte: b'.', len: 3 }),
@@ -386,8 +386,8 @@ mod tests {
             192, // 0b1_1_000_000
             1, //Num ops uvarint
             0, //Num add bytes uvarint
-            4, //Output size uvarint diff encoded from add uvarint
-            68, //COPY_O, Size 4 0b01_000100
+            5, //Output size uvarint diff encoded from add uvarint
+            69, //COPY_O, Size 5 0b01_000100
             12, //addr ivar int +6
 
             64, // 0b0_1_000_000

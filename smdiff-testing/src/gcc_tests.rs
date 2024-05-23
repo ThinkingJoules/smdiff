@@ -4,19 +4,19 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 use std::time::Instant;
 use colored::*;
-use smdiff_common::Format;
+use smdiff_encoder::EncoderConfig;
 
 use crate::DIR_PATH;
 
-pub fn encode_test_gcc_2951_2952(sec_comp:bool,format:Format)-> Result<(), Box<dyn std::error::Error>> {
-    let mut src = Cursor::new(Vec::new());
+pub fn encode_test_gcc_2951_2952(config:&EncoderConfig)-> Result<(), Box<dyn std::error::Error>> {
     let mut f_2952 = fs::File::open(&Path::new(DIR_PATH).join("gcc-2.95.2.tar"))?;
     let mut f_2952_bytes = Vec::new();
     f_2952.read_to_end(&mut f_2952_bytes).unwrap();
+    let mut src = Cursor::new(Vec::new());
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1,sec_comp,format)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,config)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size Target Only (Compress): {}", patch.len());
@@ -53,7 +53,7 @@ pub fn encode_test_gcc_2951_2952(sec_comp:bool,format:Format)-> Result<(), Box<d
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1,sec_comp,format)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().set_match_target(false))?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC only: {}", patch.len());
@@ -87,7 +87,7 @@ pub fn encode_test_gcc_2951_2952(sec_comp:bool,format:Format)-> Result<(), Box<d
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1,sec_comp,format)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,config)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch.len());
@@ -120,7 +120,7 @@ pub fn encode_test_gcc_2951_2952(sec_comp:bool,format:Format)-> Result<(), Box<d
     Ok(())
 }
 
-pub fn encode_test_gcc_2952_2953(sec_comp:bool,format:Format)-> Result<(), Box<dyn std::error::Error>> {
+pub fn encode_test_gcc_2952_2953(config:&EncoderConfig)-> Result<(), Box<dyn std::error::Error>> {
     let mut src = Cursor::new(Vec::new());
     let mut f_2953 = fs::File::open(&Path::new(DIR_PATH).join("gcc-2.95.3.tar"))?;
     let mut f_2953_bytes = Vec::new();
@@ -128,7 +128,7 @@ pub fn encode_test_gcc_2952_2953(sec_comp:bool,format:Format)-> Result<(), Box<d
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1,sec_comp,format).unwrap();
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,config).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size Target Only (Compress): {}", patch.len());
@@ -165,7 +165,7 @@ pub fn encode_test_gcc_2952_2953(sec_comp:bool,format:Format)-> Result<(), Box<d
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1,sec_comp,format)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().set_match_target(false))?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC only: {}", patch.len());
@@ -199,7 +199,7 @@ pub fn encode_test_gcc_2952_2953(sec_comp:bool,format:Format)-> Result<(), Box<d
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,true,1,sec_comp,format)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,config)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch.len());

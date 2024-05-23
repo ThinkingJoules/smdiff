@@ -1,7 +1,7 @@
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, io::{Read, Write}};
 
-use smdiff_common::{AddOp, Format, MAX_WIN_SIZE};
+use smdiff_common::{write_u_varint, AddOp, Format, MAX_WIN_SIZE};
 use smdiff_writer::{write_section_header, write_ops};
 
 use crate::{hash::{hash_chunk, ChunkHashMap, MULTIPLICATVE}, micro_encoder::encode_one_section, window_encoder::encode_window};
@@ -14,6 +14,12 @@ mod window_encoder;
 mod micro_encoder;
 //mod scanner;
 mod hash;
+pub mod zstd{
+    pub use zstd::stream::Encoder;
+}
+pub mod brotli {
+    pub use brotlic::{encode::{BrotliEncoderOptions,CompressorWriter},BlockSize,CompressionMode,Quality,WindowSize};
+}
 
 const MIN_RUN_LEN: usize = 3;
 
@@ -28,7 +34,111 @@ impl AddOp for Add<'_> {
 }
 pub type Op<'a> = smdiff_common::Op<Add<'a>>;
 
-pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, trgt: &mut R, writer: &mut W,match_trgt:bool,max_copy_step_size:u8,sec_comp:bool,format:Format) -> std::io::Result<()> {
+#[derive(Clone, Debug)]
+pub enum SecondaryCompression {
+    /// Value of 1..=16
+    /// Value represents the number of bytes to advance after a copy match is not found.
+    /// 1 will check for a match every byte, 2 every other byte, etc.
+    /// Default Value: 4
+    Smdiff{copy_miss_step:u8},
+    /// Value of 1..=22.
+    /// Default Value: 3
+    Zstd{level:i32},
+    /// Default Value: BrotliEncoderOptions::default()
+    Brotli{options: ::brotlic::BrotliEncoderOptions},
+}
+
+impl SecondaryCompression {
+    pub fn new_smdiff_default() -> Self {
+        SecondaryCompression::Smdiff { copy_miss_step: 4 }
+    }
+
+    pub fn new_zstd_default() -> Self {
+        SecondaryCompression::Zstd { level: 3 }
+    }
+
+    pub fn new_lzma_xz_default() -> Self {
+        SecondaryCompression::Brotli { options: ::brotlic::BrotliEncoderOptions::default() }
+    }
+    pub fn algo_value(&self) -> u8 {
+        match self {
+            SecondaryCompression::Smdiff { .. } => 1,
+            SecondaryCompression::Zstd { .. } => 2,
+            SecondaryCompression::Brotli { .. } => 3,
+        }
+    }
+}
+impl Default for SecondaryCompression {
+    fn default() -> Self {
+        Self::new_zstd_default()
+    }
+}
+
+/// Configuration for the encoder.
+/// Default values are:
+/// - copy_miss_step: 4
+/// - sec_comp: None
+/// - format: Interleaved
+/// - match_target: false
+#[derive(Clone, Debug)]
+pub struct EncoderConfig {
+    /// Value of 1..=16
+    /// Value represents the number of bytes to advance after a copy match is not found.
+    /// 1 will advance 1 byte and attempt to find another Copy match, 2 will advance 2 bytes, etc.
+    /// Finding Copy matches is the most expensive operation in the encoding process.
+    /// Lower values will take longer to encode but may reduce the delta file size.
+    /// Default Value: 4
+    pub copy_miss_step: u8,
+    /// None for no secondary compression.
+    /// Default Value: None
+    pub sec_comp: Option<SecondaryCompression>,
+    /// Whether to interleave or segregate the Add bytes.
+    /// Default Value: Interleaved
+    pub format: Format,
+    /// Whether to use the output file as a dictionary against itself to find additional matches.
+    /// This will increase the time to encode but may reduce the delta file size.
+    /// Default Value: false
+    pub match_target: bool,
+}
+
+impl EncoderConfig {
+    pub fn new(match_target:bool,copy_miss_step: u8, sec_comp: Option<SecondaryCompression>, format: Format) -> Self {
+        Self { copy_miss_step, sec_comp, format, match_target }
+    }
+    pub fn set_copy_miss_step(mut self, copy_miss_step: u8) -> Self {
+        assert!(copy_miss_step > 0, "copy_miss_step must be greater than 0");
+        self.copy_miss_step = copy_miss_step;
+        self
+    }
+    pub fn set_sec_comp(mut self, sec_comp: SecondaryCompression) -> Self {
+        self.sec_comp = Some(sec_comp);
+        self
+    }
+    pub fn format_interleaved(mut self) -> Self {
+        self.format = Format::Interleaved;
+        self
+    }
+    pub fn format_segregated(mut self) -> Self {
+        self.format = Format::Segregated;
+        self
+    }
+    pub fn set_match_target(mut self, match_target: bool) -> Self {
+        self.match_target = match_target;
+        self
+    }
+}
+impl Default for EncoderConfig {
+    fn default() -> Self {
+        Self {
+            copy_miss_step: 4,
+            sec_comp: None,
+            format: Format::Interleaved,
+            match_target: false,
+        }
+    }
+}
+
+pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, trgt: &mut R, mut writer: &mut W,config:&EncoderConfig) -> std::io::Result<()> {
     //to test we just read all of src and trgt in to memory.
     let mut src_bytes = Vec::new();
     src.read_to_end(&mut src_bytes)?;
@@ -37,6 +147,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
     //let start = std::time::Instant::now();
     //dbg!(src_bytes.len()+trgt_bytes.len());
     let mut win_data = Vec::new();
+    let EncoderConfig { copy_miss_step, sec_comp, format, match_target } = config;
     if trgt_bytes.len() > MAX_WIN_SIZE {
         //Larger file
         let num_windows = (trgt_bytes.len()+MAX_WIN_SIZE - 1)/MAX_WIN_SIZE;
@@ -55,7 +166,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
             src_chunks.push(src_map);
         }
         let mut trgt_chunks = Vec::new();
-        if match_trgt{
+        if *match_target{
             for (num,chunk) in trgt_bytes.chunks(win_size).enumerate(){
                 //dict_size += chunk.len();
                 let abs_start_pos = (num * win_size) as u32;
@@ -71,18 +182,36 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
         for (chunk_num,chunk) in trgt_bytes.chunks(win_size).enumerate() {
             let win_start = chunk_num * win_size;
             let win_end = win_start + chunk.len();
-            let (mut header,ops) = encode_window(&src_chunks,&trgt_chunks, &src_bytes, &trgt_bytes, win_start..win_end, hash_size as usize,max_copy_step_size);
+            let (mut header,ops) = encode_window(&src_chunks,&trgt_chunks, &src_bytes, &trgt_bytes, win_start..win_end, hash_size as usize,*copy_miss_step);
             output_tot += header.output_size;
-            header.format = format;
-            header.more_sections = chunk_num < num_windows - 1;
+            header = header.set_format(*format).set_more_sections(chunk_num < num_windows - 1);
 
-            //dbg!(header);
-            if sec_comp {
-                header.compression_algo = 1;
+            if sec_comp.is_some() {
+                let comp = sec_comp.clone().unwrap();
+                header.compression_algo = comp.algo_value();
+                //dbg!(&header);
                 write_section_header(&header, writer)?;
                 write_ops(&ops,&header,&mut win_data)?;
-                let mut crsr = std::io::Cursor::new(&mut win_data);
-                encode(&mut std::io::Cursor::new(&mut Vec::new()), &mut crsr, writer, true, 1,false,Format::Interleaved)?;
+                match comp{
+                    SecondaryCompression::Smdiff { copy_miss_step } => {
+                        let mut crsr = std::io::Cursor::new(&mut win_data);
+                        let inner_config = EncoderConfig::new(true, copy_miss_step, None, Format::Interleaved);
+                        encode(&mut std::io::Cursor::new(&mut Vec::new()), &mut crsr, writer, &inner_config)?;
+                    },
+                    SecondaryCompression::Zstd { level } => {
+                        let mut a = ::zstd::Encoder::new(writer, level)?;
+                        a.set_pledged_src_size(Some(win_data.len() as u64))?;
+                        a.include_contentsize(true)?;
+                        a.write_all(&win_data)?;
+                        writer = a.finish()?;
+                    },
+                    SecondaryCompression::Brotli { mut options }=> {
+                        options.size_hint(win_data.len() as u32);
+                        let mut a = ::brotlic::CompressorWriter::with_encoder(options.build().unwrap(), writer);
+                        a.write_all(&win_data)?;
+                        writer = a.into_inner()?;
+                    },
+                }
                 win_data.clear();
             }else{
                 write_section_header(&header, writer)?;
@@ -95,7 +224,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
         let hash_size = 3;
         //let start_dict_creation = std::time::Instant::now();
         let src_dict = hash_chunk(&src_bytes, 0,hash_size, MULTIPLICATVE, src_bytes.len() as u32);
-        let trgt_dict = if match_trgt{
+        let trgt_dict = if *match_target{
             hash_chunk(&trgt_bytes, 0,hash_size, MULTIPLICATVE,trgt_bytes.len() as u32)
         }else{
             ChunkHashMap::new(0)
@@ -104,13 +233,31 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
         //println!("Dict creation took: {:?} size: {} (mb/s: {})", dict_creation_dur,src_bytes.len(), (src_bytes.len())as f64 / 1024.0 / 1024.0 / dict_creation_dur.as_secs_f64());
 
         let (mut header,ops) = encode_one_section(&src_dict,&trgt_dict, &src_bytes, &trgt_bytes, hash_size as usize);
-        header.format = format;
-        if sec_comp {
-            header.compression_algo = 1;
+        header.format = *format;
+        if sec_comp.is_some() {
+            let comp = sec_comp.clone().unwrap();
+            header.compression_algo = comp.algo_value();
             write_section_header(&header, writer)?;
             write_ops(&ops,&header,&mut win_data)?;
-            let mut crsr = std::io::Cursor::new(&mut win_data);
-            encode(&mut std::io::Cursor::new(&mut Vec::new()), &mut crsr, writer, true, 1,false,Format::Interleaved)?;
+            match comp{
+                SecondaryCompression::Smdiff { copy_miss_step } => {
+                    let mut crsr = std::io::Cursor::new(&mut win_data);
+                    let inner_config = EncoderConfig::new(true, copy_miss_step, None, Format::Interleaved);
+                    encode(&mut std::io::Cursor::new(&mut Vec::new()), &mut crsr, writer, &inner_config)?;
+                },
+                SecondaryCompression::Zstd { level } => {
+                    let mut a = zstd::Encoder::new(writer, level)?;
+                    a.set_pledged_src_size(Some(win_data.len() as u64))?;
+                    a.include_contentsize(true)?;
+                    a.write_all(&win_data)?;
+                    writer = a.finish()?;
+                },
+                SecondaryCompression::Brotli { mut options }=> {
+                    options.size_hint(win_data.len() as u32);
+                    ::brotlic::CompressorWriter::with_encoder(options.build().unwrap(), writer).write_all(&win_data)?;
+                },
+            }
+            win_data.clear();
         }else{
             write_section_header(&header, writer)?;
             write_ops(&ops,&header,writer)?;

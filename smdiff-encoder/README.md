@@ -8,3 +8,6 @@ Assume about 20x whatever your two documents are: So 100mb (50+50) is about 2gb 
 This is wicked fast. Faster at generating a delta using xdelta3 or open-vcdiff (google). But I'm sure they actually care about memory usage.
 
 Perhaps one day I can try to be more cognizant of memory usage, until then, just make sure you have some RAM.
+
+## Improvements
+After making a window selection algorithm, it would then probably make sense to try to make a stream interface. There isn't really a point as the current encoder needs everything in memory. I think it would make the API clunky, adding a layer of indirection at the moment.

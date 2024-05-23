@@ -4,7 +4,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 use std::time::Instant;
 
-use smdiff_common::Format;
+use smdiff_encoder::EncoderConfig;
 use smdiff_reader::SectionReader;
 
 use crate::{Stats, DIR_PATH};
@@ -23,7 +23,7 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,255,false,Format::Segregated)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_copy_miss_step(16).format_segregated())?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
@@ -58,10 +58,10 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
         //collect the s_copy_lens and sort ascending by key, then print out all the keys and values
         let mut s_copy_lens: Vec<_> = s_copy_lens.into_iter().collect();
         s_copy_lens.sort_by_key(|k| k.0);
-        println!("S Copy Lens:");
-        for (k,v) in s_copy_lens.iter().take(16) {
-            //println!("{}: {}", k, v);
-        }
+        // println!("S Copy Lens:");
+        // for (k,v) in s_copy_lens.iter().take(16) {
+        //     //println!("{}: {}", k, v);
+        // }
     }
 
     let mut decode_sm = Vec::new();
@@ -93,13 +93,13 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
-    let mut src = generate_rand_vec(15_000_000, [0u8;32]);
+    let src = generate_rand_vec(15_000_000, [0u8;32]);
     let mut src = Cursor::new(src);
-    let mut target = generate_rand_vec(15_500_000, [1u8;32]);
+    let target = generate_rand_vec(15_500_000, [1u8;32]);
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1,false,Format::Segregated)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_copy_miss_step(1).set_match_target(true))?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
@@ -169,13 +169,13 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
-    let mut src = generate_rand_vec(1_000, [0u8;32]);
+    let src = generate_rand_vec(1_000, [0u8;32]);
     let mut src = Cursor::new(src);
-    let mut target = generate_rand_vec(1_500, [0u8;32]);
+    let target = generate_rand_vec(1_500, [0u8;32]);
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,false,1,false,Format::Segregated)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_copy_miss_step(1).set_match_target(true))?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);

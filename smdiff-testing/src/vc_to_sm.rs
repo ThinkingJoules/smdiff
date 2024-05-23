@@ -4,7 +4,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 use std::time::Instant;
 
-use smdiff_reader::{read_ops, read_section, SectionReader};
+use smdiff_reader::{read_ops, SectionReader};
 
 use crate::{Stats, DIR_PATH};
 use colored::*;
@@ -17,6 +17,8 @@ pub fn vc_analysis()-> Result<(), Box<dyn std::error::Error>> {
     let mut reader = Cursor::new(patch_a);
     let start = Instant::now();
     smdiff_vcdiff::convert_vcdiff_to_smdiff(&mut reader, &mut converted_a)?;
+    let duration = start.elapsed();
+    println!("Time elapsed in convert_vcdiff_to_smdiff() is: {:?}", duration);
     let sm_patch = Cursor::new(converted_a);
     let mut reader = SectionReader::new(sm_patch);
     while let Ok(Some((ops,_))) = reader.next(){
@@ -58,6 +60,7 @@ pub fn vc_analysis()-> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
 pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
     let mut file = fs::File::open(&Path::new(DIR_PATH).join("patch_a.ovcd.vcdiff")).unwrap();
     let mut patch_a = Vec::new();

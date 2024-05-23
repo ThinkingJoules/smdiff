@@ -4,13 +4,17 @@ mod gcc_tests;
 mod size_tests;
 mod vc_to_sm;
 mod merge_test;
-
+mod sec_comp;
+use sec_comp::{analyze_sec_comp_large_file_best, analyze_sec_comp_sentence_best};
 use smdiff_common::Format;
+use smdiff_encoder::{brotli::{BlockSize, BrotliEncoderOptions, CompressionMode, Quality, WindowSize}, EncoderConfig, SecondaryCompression};
 // use params::*;
 use vc_to_sm::*;
 use size_tests::*;
 use gcc_tests::*;
 use merge_test::*;
+
+use crate::sec_comp::{analyze_sec_comp_large_file_worst, test_sec_comp_working};
 /*
 Xdelta3 seems to not produce valid patches.
 Alternatively both open-vcdiff and my impl made the same error..
@@ -27,17 +31,24 @@ const _URLS: [&str; 6] = [
 fn main()-> Result<(), Box<dyn std::error::Error>> {
     // TESTS
     merge_2951_2952_2953()?;
-    let sec_comp = true;
-    let format = Format::Interleaved;
-    encode_test_gcc_2951_2952(sec_comp,format)?;
-    encode_test_gcc_2952_2953(sec_comp,format)?;
+
+    let config = EncoderConfig::new(true, 16, None, Format::Interleaved);
+    println!("{:?}", config);
+    encode_test_gcc_2951_2952(&config)?;
+    encode_test_gcc_2952_2953(&config)?;
+
+    test_sec_comp_working()?;
+
     encode_test_micro()?;
     encode_test_small()?;
     encode_test_large()?;
+    vc_to_sm_test()?;
 
     // ANALYSIS
-    //vc_to_sm_test()?;
     // vc_analysis()?;
+    // analyze_sec_comp_large_file_worst()?;
+    // analyze_sec_comp_large_file_best()?;
+    // analyze_sec_comp_sentence_best()?;
     Ok(())
 }
 

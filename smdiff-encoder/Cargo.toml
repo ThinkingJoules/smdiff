@@ -9,6 +9,5 @@ build = "build.rs"
 [dependencies]
 smdiff-common ={ path = "../smdiff-common" }
 smdiff-writer ={ path = "../smdiff-writer" }
-rustc-hash = "1.1.0"
-bloomfilter = "1.0.13"
-
+zstd = "0.13.1"
+brotlic = "0.8.2"

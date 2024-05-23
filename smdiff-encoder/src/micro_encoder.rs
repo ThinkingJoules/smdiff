@@ -9,7 +9,7 @@ use crate::{add::{make_add_runs, make_adds}, hash::{find_substring_in_src, find_
 pub fn encode_one_section<'a>(src_dict: &ChunkHashMap, trgt_dict: &ChunkHashMap, src_bytes:&[u8], target: &'a [u8], hash_size:usize) -> (SectionHeader,Vec<Op<'a>>){
     assert!(target.len() <= MAX_WIN_SIZE);
     if target.is_empty(){
-        return (SectionHeader{ num_operations: 0, num_add_bytes: 0, output_size: 0, compression_algo: 0, format: Format::Interleaved, more_sections: false },Vec::new());
+        return (SectionHeader::default(),Vec::new());
     }
     // let mut src_scanner = Scanner::new(&src_bytes);
     // let mut trgt_scanner = if match_trgt{Scanner::new(&target)}else{Scanner::new(&[])};

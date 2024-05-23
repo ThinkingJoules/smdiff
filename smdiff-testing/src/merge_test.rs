@@ -7,6 +7,7 @@ use std::time::Instant;
 use crate::DIR_PATH;
 
 use colored::*;
+use smdiff_encoder::EncoderConfig;
 
 
 
@@ -21,7 +22,7 @@ pub fn merge_2951_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch_a = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch_a,true,1,false,smdiff_common::Format::Interleaved)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch_a,&EncoderConfig::default().set_match_target(true))?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch_a.len());
@@ -34,7 +35,7 @@ pub fn merge_2951_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch_b = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch_b,true,1,false,smdiff_common::Format::Interleaved)?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch_b,&EncoderConfig::default().set_match_target(true))?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch_b.len());
