@@ -1,7 +1,9 @@
 
 use std::{cmp::Ordering, io::{Read, Write}};
 
-use smdiff_common::{write_u_varint, AddOp, Format, MAX_WIN_SIZE};
+use add::make_add_runs;
+use encoder::EncoderConfig;
+use smdiff_common::{write_u_varint, AddOp, Format, SectionHeader, MAX_INST_SIZE, MAX_WIN_SIZE};
 use smdiff_writer::{write_section_header, write_ops};
 
 use crate::{hash::{hash_chunk, ChunkHashMap, MULTIPLICATVE}, micro_encoder::encode_one_section, window_encoder::encode_window};
@@ -14,6 +16,11 @@ mod window_encoder;
 mod micro_encoder;
 //mod scanner;
 mod hash;
+mod hasher;
+mod hashmap;
+mod trgt_matcher;
+mod src_matcher;
+mod encoder;
 pub mod zstd{
     pub use zstd::stream::Encoder;
 }
@@ -81,14 +88,14 @@ impl Default for SecondaryCompression {
 /// - format: Interleaved
 /// - match_target: false
 #[derive(Clone, Debug)]
-pub struct EncoderConfig {
+pub struct OldEncoderConfig {
     /// Value of 1..=16
     /// Value represents the number of bytes to advance after a copy match is not found.
     /// 1 will advance 1 byte and attempt to find another Copy match, 2 will advance 2 bytes, etc.
     /// Finding Copy matches is the most expensive operation in the encoding process.
     /// Lower values will take longer to encode but may reduce the delta file size.
     /// Default Value: 4
-    pub copy_miss_step: u8,
+    pub m_step: u8,
     /// None for no secondary compression.
     /// Default Value: None
     pub sec_comp: Option<SecondaryCompression>,
@@ -101,13 +108,13 @@ pub struct EncoderConfig {
     pub match_target: bool,
 }
 
-impl EncoderConfig {
-    pub fn new(match_target:bool,copy_miss_step: u8, sec_comp: Option<SecondaryCompression>, format: Format) -> Self {
-        Self { copy_miss_step, sec_comp, format, match_target }
+impl OldEncoderConfig {
+    pub fn new(match_target:bool,m_step: u8, sec_comp: Option<SecondaryCompression>, format: Format) -> Self {
+        Self { m_step, sec_comp, format, match_target }
     }
     pub fn set_copy_miss_step(mut self, copy_miss_step: u8) -> Self {
         assert!(copy_miss_step > 0, "copy_miss_step must be greater than 0");
-        self.copy_miss_step = copy_miss_step;
+        self.m_step = copy_miss_step;
         self
     }
     pub fn set_sec_comp(mut self, sec_comp: SecondaryCompression) -> Self {
@@ -127,18 +134,81 @@ impl EncoderConfig {
         self
     }
 }
-impl Default for EncoderConfig {
+impl Default for OldEncoderConfig {
     fn default() -> Self {
         Self {
-            copy_miss_step: 4,
+            m_step: 4,
             sec_comp: None,
             format: Format::Interleaved,
             match_target: false,
         }
     }
 }
+pub fn test_encode<W: std::io::Write>(src: &[u8], trgt: &[u8], mut writer: &mut W) -> std::io::Result<()>  {
+    let mut ops = Vec::new();
+    let mut cur_len = 0;
+    let mut num_add_bytes = 0;
+    let segments = encoder::encode_inner(&EncoderConfig::default(), src, trgt);
+    dbg!(segments.len());
+    let mut cur_o_pos = 0;
+    for segment in segments{
+        match segment{
+            encoder::InnerSegment::NoMatch{length}=>{
+                let mut remaining_len = length;
+                while remaining_len > 0 {
+                    let max_len = remaining_len.min(MAX_WIN_SIZE as usize - cur_len);
+                    make_add_runs(&trgt[cur_o_pos..cur_o_pos+max_len], &mut ops, &mut num_add_bytes);
+                    cur_len += max_len;
+                    if cur_len == MAX_WIN_SIZE{
+                        let header = SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(true);
+                        dbg!(&header);
+                        write_segment(&ops, &header, &mut writer)?;
+                        ops.clear();
+                        cur_len = 0;
+                        num_add_bytes = 0;
+                    }
+                    cur_o_pos += max_len;
+                    remaining_len -= max_len;
+                }
+            },
+            encoder::InnerSegment::MatchSrc{start,length}=>{
+                let mut remaining_len = length;
+                let mut addr = start as u64;
+                while remaining_len > 0 {
+                    let max_len = remaining_len.min(MAX_WIN_SIZE as usize - cur_len).min(MAX_INST_SIZE);
+                    let op = Op::Copy(smdiff_common::Copy{ src: smdiff_common::CopySrc::Dict, addr, len: max_len as u16 });
+                    ops.push(op);
+                    remaining_len -= max_len;
+                    addr += max_len as u64;
+                    cur_o_pos += max_len;
+                    cur_len += max_len;
+                    if cur_len == MAX_WIN_SIZE{
+                        let header = SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(true);
+                        dbg!(&header);
+                        write_segment(&ops, &header, &mut writer)?;
+                        ops.clear();
+                        cur_len = 0;
+                        num_add_bytes = 0;
+                    }
+                }
+            },
+            encoder::InnerSegment::MatchTrgt{start,length}=>{
+                unimplemented!()
+            }
+        }
 
-pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, trgt: &mut R, mut writer: &mut W,config:&EncoderConfig) -> std::io::Result<()> {
+    }
+    write_segment(&ops, &SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(false), &mut writer)?;
+
+    Ok(())
+}
+
+fn write_segment<W: std::io::Write>(ops:&Vec<Op>,header:&SectionHeader, mut writer: &mut W)->std::io::Result<()> {
+    write_section_header(&header, writer)?;
+    write_ops(&ops,&header,writer)?;
+    Ok(())
+}
+pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, trgt: &mut R, mut writer: &mut W,config:&OldEncoderConfig) -> std::io::Result<()> {
     //to test we just read all of src and trgt in to memory.
     let mut src_bytes = Vec::new();
     src.read_to_end(&mut src_bytes)?;
@@ -147,7 +217,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
     //let start = std::time::Instant::now();
     //dbg!(src_bytes.len()+trgt_bytes.len());
     let mut win_data = Vec::new();
-    let EncoderConfig { copy_miss_step, sec_comp, format, match_target } = config;
+    let OldEncoderConfig { m_step: copy_miss_step, sec_comp, format, match_target } = config;
     if trgt_bytes.len() > MAX_WIN_SIZE {
         //Larger file
         let num_windows = (trgt_bytes.len()+MAX_WIN_SIZE - 1)/MAX_WIN_SIZE;
@@ -195,7 +265,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
                 match comp{
                     SecondaryCompression::Smdiff { copy_miss_step } => {
                         let mut crsr = std::io::Cursor::new(&mut win_data);
-                        let inner_config = EncoderConfig::new(true, copy_miss_step, None, Format::Interleaved);
+                        let inner_config = OldEncoderConfig::new(true, copy_miss_step, None, Format::Interleaved);
                         encode(&mut std::io::Cursor::new(&mut Vec::new()), &mut crsr, writer, &inner_config)?;
                     },
                     SecondaryCompression::Zstd { level } => {
@@ -242,7 +312,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(src: &mut R, tr
             match comp{
                 SecondaryCompression::Smdiff { copy_miss_step } => {
                     let mut crsr = std::io::Cursor::new(&mut win_data);
-                    let inner_config = EncoderConfig::new(true, copy_miss_step, None, Format::Interleaved);
+                    let inner_config = OldEncoderConfig::new(true, copy_miss_step, None, Format::Interleaved);
                     encode(&mut std::io::Cursor::new(&mut Vec::new()), &mut crsr, writer, &inner_config)?;
                 },
                 SecondaryCompression::Zstd { level } => {
