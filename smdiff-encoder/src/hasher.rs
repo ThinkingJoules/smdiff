@@ -19,6 +19,27 @@ impl<'a> LargeHashCursor<'a> {
             panic!("Valid hash window sizes are 3-9")
         }
     }
+    pub fn data_len(&self) -> usize {
+        match self {
+            LargeHashCursor::Direct(cursor) => {
+                cursor.slice.len()
+            }
+            LargeHashCursor::Rolling(cursor) => {
+                cursor.slice.len()
+            }
+        }
+    }
+    pub(crate) fn win_size(&self) -> usize {
+        match self {
+            LargeHashCursor::Direct(cursor) => {
+                cursor.win_size()
+            }
+            LargeHashCursor::Rolling(cursor) => {
+                cursor.rolling_hash.win_len
+            }
+        }
+
+    }
 }
 
 impl<'a> HasherCusor for LargeHashCursor<'a> {
@@ -246,6 +267,9 @@ pub struct SmallHashCursor<'a> {
     win_size: usize,
 }
 impl<'a> SmallHashCursor<'a> {
+    pub(crate) fn win_size(&self) -> usize {
+        self.win_size
+    }
     pub(crate) fn new(slice: &'a [u8], win_size: usize) -> Self {
         assert!((3..=4).contains(&win_size));
         let mut crsr = SmallHashCursor {

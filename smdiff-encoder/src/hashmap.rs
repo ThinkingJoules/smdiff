@@ -36,7 +36,7 @@ impl PrevList {
         *self.positions.get_mut(key_position & self.mod_mask).unwrap() = position + BUCKET_VALUE_OFFSET;
     }
 }
-struct PrevPositionIterator<'a> {
+pub struct PrevPositionIterator<'a> {
     list: &'a PrevList,
     last_pos: usize,     // Base position for comparison
     cur_out_pos: usize,  // Current output position

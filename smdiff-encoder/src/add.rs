@@ -5,6 +5,24 @@ use smdiff_common::{Run, MAX_INST_SIZE, MAX_RUN_LEN};
 
 use crate::{run::{filter_runs, find_runs_in_add}, Add, Op};
 
+pub fn make_add_ops<'a>(bytes: &'a [u8],output: &mut Vec<Op<'a>>){
+    let total_len = bytes.len();
+    if total_len == 1{//emit a run of len 1
+        output.push(Op::Run(Run{len: 1, byte: bytes[0]}));
+        return;
+    }
+    let mut processed = 0;
+    loop{
+        if processed == total_len{
+            break;
+        }
+        let to_add = total_len - processed;
+        let chunk_size = to_add.min(MAX_INST_SIZE as usize);
+        let op = Add{bytes: &bytes[processed..processed+chunk_size]};
+        processed += chunk_size;
+        output.push(Op::Add(op));
+    }
+}
 
 pub fn make_adds<'a>(bytes: &'a [u8],output: &mut Vec<Op<'a>>,num_add_bytes:&mut usize){
     let total_len = bytes.len();

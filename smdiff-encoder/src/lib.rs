@@ -20,6 +20,7 @@ mod hasher;
 mod hashmap;
 mod trgt_matcher;
 mod src_matcher;
+mod op_maker;
 mod encoder;
 pub mod zstd{
     pub use zstd::stream::Encoder;
@@ -148,54 +149,61 @@ pub fn test_encode<W: std::io::Write>(src: &[u8], trgt: &[u8], mut writer: &mut 
     let mut ops = Vec::new();
     let mut cur_len = 0;
     let mut num_add_bytes = 0;
-    let segments = encoder::encode_inner(&EncoderConfig::default(), src, trgt);
+    let mut config = EncoderConfig::default();
+    let segments = encoder::encode_inner(&mut config, src, trgt);
+    //we can print the setting that the system set here.
+
     dbg!(segments.len());
     let mut cur_o_pos = 0;
     for segment in segments{
-        match segment{
-            encoder::InnerSegment::NoMatch{length}=>{
-                let mut remaining_len = length;
-                while remaining_len > 0 {
-                    let max_len = remaining_len.min(MAX_WIN_SIZE as usize - cur_len);
-                    make_add_runs(&trgt[cur_o_pos..cur_o_pos+max_len], &mut ops, &mut num_add_bytes);
-                    cur_len += max_len;
-                    if cur_len == MAX_WIN_SIZE{
-                        let header = SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(true);
-                        dbg!(&header);
-                        write_segment(&ops, &header, &mut writer)?;
-                        ops.clear();
-                        cur_len = 0;
-                        num_add_bytes = 0;
-                    }
-                    cur_o_pos += max_len;
-                    remaining_len -= max_len;
-                }
-            },
-            encoder::InnerSegment::MatchSrc{start,length}=>{
-                let mut remaining_len = length;
-                let mut addr = start as u64;
-                while remaining_len > 0 {
-                    let max_len = remaining_len.min(MAX_WIN_SIZE as usize - cur_len).min(MAX_INST_SIZE);
-                    let op = Op::Copy(smdiff_common::Copy{ src: smdiff_common::CopySrc::Dict, addr, len: max_len as u16 });
-                    ops.push(op);
-                    remaining_len -= max_len;
-                    addr += max_len as u64;
-                    cur_o_pos += max_len;
-                    cur_len += max_len;
-                    if cur_len == MAX_WIN_SIZE{
-                        let header = SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(true);
-                        dbg!(&header);
-                        write_segment(&ops, &header, &mut writer)?;
-                        ops.clear();
-                        cur_len = 0;
-                        num_add_bytes = 0;
-                    }
-                }
-            },
-            encoder::InnerSegment::MatchTrgt{start,length}=>{
-                unimplemented!()
-            }
-        }
+
+        // match segment{
+        //     encoder::InnerSegment::NoMatch{length}=>{
+        //         let mut remaining_len = length;
+        //         while remaining_len > 0 {
+        //             let max_len = remaining_len.min(MAX_WIN_SIZE as usize - cur_len);
+        //             make_add_runs(&trgt[cur_o_pos..cur_o_pos+max_len], &mut ops, &mut num_add_bytes);
+        //             cur_len += max_len;
+        //             if cur_len == MAX_WIN_SIZE{
+        //                 let header = SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(true);
+        //                 dbg!(&header);
+        //                 write_segment(&ops, &header, &mut writer)?;
+        //                 ops.clear();
+        //                 cur_len = 0;
+        //                 num_add_bytes = 0;
+        //             }
+        //             cur_o_pos += max_len;
+        //             remaining_len -= max_len;
+        //         }
+        //     },
+        //     encoder::InnerSegment::MatchSrc{start,length}=>{
+        //         let mut remaining_len = length;
+        //         let mut addr = start as u64;
+        //         while remaining_len > 0 {
+        //             let max_len = remaining_len.min(MAX_WIN_SIZE as usize - cur_len).min(MAX_INST_SIZE);
+        //             let op = Op::Copy(smdiff_common::Copy{ src: smdiff_common::CopySrc::Dict, addr, len: max_len as u16 });
+        //             ops.push(op);
+        //             remaining_len -= max_len;
+        //             addr += max_len as u64;
+        //             cur_o_pos += max_len;
+        //             cur_len += max_len;
+        //             if cur_len == MAX_WIN_SIZE{
+        //                 let header = SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(true);
+        //                 dbg!(&header);
+        //                 write_segment(&ops, &header, &mut writer)?;
+        //                 ops.clear();
+        //                 cur_len = 0;
+        //                 num_add_bytes = 0;
+        //             }
+        //         }
+        //     },
+        //     encoder::InnerSegment::Run { byte, length } =>{
+
+        //     }
+        //     encoder::InnerSegment::MatchTrgt{start,length}=>{
+        //         unimplemented!()
+        //     }
+        // }
 
     }
     write_segment(&ops, &SectionHeader::new(ops.len() as u32, num_add_bytes as u32, cur_len as u32).set_more_sections(false), &mut writer)?;
