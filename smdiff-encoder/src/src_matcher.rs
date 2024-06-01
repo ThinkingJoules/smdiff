@@ -1,4 +1,3 @@
-use std::ops::Range;
 
 use crate::{hasher::{HasherCusor, LargeHashCursor}, hashmap::{BasicHashTable, HashTable}};
 
@@ -16,49 +15,50 @@ impl<'a> SrcMatcher<'a> {
     pub(crate) fn hash_win_len(&self)->usize{
         self.hash_win_len
     }
-    pub(crate) fn chain_check(&self)->usize{
-        self.chain_check
-    }
     pub(crate) fn advance_and_store(&mut self) {
-        let start_pos = self.hasher.pos();
+        let start_pos = self.hasher.peek_next_pos();
+        //if start_pos >= self.hasher.data_len() - self.hash_win_len{return}
+        debug_assert!(start_pos % self.l_step == 0, "start_pos({}) must be divisible by l_step({})",start_pos,self.l_step);
         let end_pos = start_pos + self.l_step;
-        if self.l_step > self.hash_win_len{
+        //dbg!(start_pos,end_pos);
+        if self.l_step >= self.hash_win_len{
             self.seek(end_pos)
-        }else{
-            for _ in 1..self.l_step{
-                self.hasher.next(); //roll step amt -1
+        }else if start_pos + self.l_step < self.hasher.data_len(){
+            for _ in 0..self.l_step{
+                self.hasher.next();
             }
-            if let Some((hash,pos)) = self.hasher.next(){
-                assert_eq!(end_pos,pos);
-                self.store(hash,pos)
-            }
+            debug_assert!(end_pos == self.hasher.peek_next_pos());
+            self.store(self.hasher.peek_next_hash(),self.hasher.peek_next_pos());
         }
     }
     pub(crate) fn seek(&mut self, pos:usize){
-        assert!(self.hasher.pos() <= pos);
+        debug_assert!(self.hasher.peek_next_pos() <= pos);
         let aligned_pos = self.align_pos(pos);
         if let Some(hash) = self.hasher.seek(aligned_pos) {
-            self.store(hash,pos)
+            self.store(hash,aligned_pos)
         }
     }
     pub(crate) fn center_on(&mut self, cur_o_pos:usize){
-        let end = self.align_pos((cur_o_pos + self.src_win_size / 2).min(self.hasher.data_len()));
-        let cur_hash_pos = self.hasher.pos();
-        if end <= cur_hash_pos{return;}
-        let diff = end - cur_hash_pos;
+        let mid = cur_o_pos.max(self.src_win_size / 2);
+        let end = self.align_pos((self.hasher.data_len()-self.hash_win_len).min(mid + self.src_win_size/2));
+        let start = end.saturating_sub(self.src_win_size);
+        let nex_pos = self.hasher.peek_next_pos();
+        debug_assert!(nex_pos % self.l_step == 0, "nex_pos({}) must be divisible by l_step({})",nex_pos,self.l_step);
+        debug_assert!(end >= nex_pos);
+        let mut diff = end - nex_pos;
         if diff > self.src_win_size{
-            self.seek(end - self.src_win_size);
-            return;
+            self.seek(start);
+            diff = self.src_win_size;
         }
-        for _ in 0..=diff/self.l_step{
+        for _ in 0..diff/self.l_step{
             self.advance_and_store();
         }
-        assert!(self.hasher.pos() >= end);
+        debug_assert!(self.hasher.peek_next_pos() == end, "self.hasher.peek_next_pos({}) != end({}),diff({})",self.hasher.peek_next_pos(),end,diff);
     }
     ///Returns (src_pos, pre_match, post_match) post_match *includes* the hash_win_len.
     pub fn find_best_src_match(&self,src:&[u8],trgt:&[u8],cur_o_pos:usize,hash:usize)->Option<(usize,usize,usize)>{
         let table_pos = self.table.get_last_pos(self.table.calc_index(hash))?;
-        let mut iter = std::iter::once(table_pos).chain(self.table.iter_prev_starts(table_pos, cur_o_pos));
+        let mut iter = std::iter::once(table_pos).chain(self.table.iter_prev_starts(table_pos, self.hasher.peek_next_pos()));
         let mut chain = self.chain_check;
         let mut best = None;
         let mut best_len = 0;
@@ -79,10 +79,14 @@ impl<'a> SrcMatcher<'a> {
             }else{break;}
 
         }
+        //dbg!(self.chain_check - chain);
         best
     }
+    fn align(pos:usize,l_step:usize)->usize{
+        pos - (pos % l_step)
+    }
     fn align_pos(&self, pos:usize)->usize{
-        pos - (pos % self.l_step)
+        Self::align(pos, self.l_step)
     }
     /// Positions returned from the table are in table space, this converts them to absolute start positions.
     /// In other words, the table_pos is mutliplied by l_step to get the absolute position.
@@ -90,18 +94,19 @@ impl<'a> SrcMatcher<'a> {
         table_pos * self.l_step
     }
     fn abs_to_table_pos(&self, abs_pos:usize)->usize{
-        debug_assert!(abs_pos % self.l_step == 0, "abs_pos must be divisible by l_step");
+        debug_assert!(abs_pos % self.l_step == 0, "abs_pos({}) is !divisible by l_step({})",abs_pos,self.l_step);
         abs_pos / self.l_step
     }
     fn store(&mut self, hash:usize, abs_pos:usize){
+        debug_assert!(abs_pos % self.l_step == 0);
         let idx = self.table.calc_index(hash);
         let table_pos = self.abs_to_table_pos(abs_pos);
         self.table.insert(idx, table_pos);
     }
 }
 
-pub const DEFAULT_SRC_WIN_SIZE: usize = 1 << 26;
-pub const DEFAULT_PREV_SIZE: usize = 1 << 18;
+const DEFAULT_SRC_WIN_SIZE: usize = 1 << 26;
+//const DEFAULT_PREV_SIZE: usize = 1 << 18;
 #[derive(Debug, Clone)]
 pub struct SrcMatcherConfig{
     ///How much to advance the Large Hash between storing a src hash.
@@ -114,6 +119,12 @@ pub struct SrcMatcherConfig{
     pub max_src_win_size: Option<usize>,
     pub hash_win_len: Option<usize>,
 }
+
+impl Default for SrcMatcherConfig {
+    fn default() -> Self {
+        Self::comp_level(3)
+    }
+}
 impl SrcMatcherConfig {
     ///Creates a new SrcMatcherConfig with the given parameters.
     /// l_step: How much to advance the Large Hash between storing a src hash.
@@ -125,35 +136,36 @@ impl SrcMatcherConfig {
     ///Creates a new SrcMatcherConfig with the given compression level.
     /// level: The compression level to use. Must be between 0 and 9.
     /// The higher the level the more accurate the matches but slower.
-    pub fn new_from_compression_level(level:usize)->Self{
+    pub fn comp_level(level:usize)->Self{
         assert!(level <= 9);
-        let l_step = 3 * level % 25;
-        //let lazy_escape_len = 6 + (level*81 / 9);
+        let l_step = 2 + ((24 * (9-level)) / 9); // 26..=2;
         let chain_check = 1 + level;
+        //dbg!(level,l_step,chain_check);
         Self { l_step, chain_check, prev_table_capacity: None, max_src_win_size: None, hash_win_len: None}
     }
     pub fn with_table_capacity(mut self, table_capacity:usize)->Self{
         self.prev_table_capacity = Some(table_capacity);
         self
     }
-    pub fn build<'a>(&mut self,src:&'a [u8],trgt_start_pos:usize,trgt_len:usize)->SrcMatcher<'a>{
+    pub(crate) fn build<'a>(&mut self,src:&'a [u8],trgt_start_pos:usize,trgt_len:usize)->SrcMatcher<'a>{
         let Self { l_step, chain_check, prev_table_capacity, max_src_win_size, hash_win_len } = self;
-        let trgt_matchable_len = trgt_len - trgt_start_pos;
-
         max_src_win_size.get_or_insert(DEFAULT_SRC_WIN_SIZE);
-        max_src_win_size.map(|x| x.min(src.len())).unwrap();
+        *max_src_win_size = Some(SrcMatcher::align(max_src_win_size.unwrap().min(src.len()),*l_step));
         let src_win = max_src_win_size.unwrap();
-        let advance_matcher_at_trgt_pos = if trgt_matchable_len > src.len() {trgt_start_pos.max(src_win / 2)}else{trgt_len};
-        let prev_table_capacity = prev_table_capacity.get_or_insert(DEFAULT_PREV_SIZE);
-        let hash_win_len = hash_win_len.unwrap_or(src_hash_len(src_win));
-        let hasher = LargeHashCursor::new(src, src_hash_len(trgt_matchable_len));
-        let table = BasicHashTable::new(src_win/ *l_step, *prev_table_capacity);
-        let mut matcher = SrcMatcher{ l_step:*l_step, hash_win_len, chain_check:*chain_check, hasher, table, src_win_size: advance_matcher_at_trgt_pos };
+        let prev_capacity = if *chain_check == 1 {0}else{prev_table_capacity.unwrap_or((max_src_win_size.unwrap() / *l_step).next_power_of_two() >> 1)};
+        *prev_table_capacity = Some(prev_capacity);
+        let hwl = hash_win_len.get_or_insert(src_hash_len(src_win));
+        let hasher = LargeHashCursor::new(src, *hwl);
+        let table = BasicHashTable::new(src_win/ *l_step, prev_capacity);
+        let mut matcher = SrcMatcher{ l_step:*l_step, hash_win_len:*hwl, chain_check:*chain_check, hasher, table, src_win_size: src_win };
         //prefill with hash start positions.
         let start = trgt_start_pos.saturating_sub(src_win / 2);
-        matcher.seek(start);
-        for _ in (start..).take(*prev_table_capacity){
-            matcher.advance_and_store();
+        if start > src_win / 2 {
+            matcher.center_on(start + src_win / 2);
+        }else{
+            for _ in 0..((src_win-*hwl) / *l_step){
+                matcher.advance_and_store()
+            }
         }
         matcher
     }

@@ -1,6 +1,5 @@
 
 use core::panic;
-use std::mem::size_of;
 pub enum LargeHashCursor<'a>{
     Direct(SmallHashCursor<'a>),
     Rolling(RollingHashCursor<'a>),
@@ -64,23 +63,23 @@ impl<'a> HasherCusor for LargeHashCursor<'a> {
             }
         }
     }
-    fn pos(&self) -> usize {
+    fn peek_next_pos(&self) -> usize {
         match self {
             LargeHashCursor::Direct(cursor) => {
-                cursor.pos()
+                cursor.peek_next_pos()
             }
             LargeHashCursor::Rolling(cursor) => {
-                cursor.pos()
+                cursor.peek_next_pos()
             }
         }
     }
-    fn hash(&self) -> usize {
+    fn peek_next_hash(&self) -> usize {
         match self {
             LargeHashCursor::Direct(cursor) => {
-                cursor.hash()
+                cursor.peek_next_hash()
             }
             LargeHashCursor::Rolling(cursor) => {
-                cursor.hash()
+                cursor.peek_next_hash()
             }
         }
     }
@@ -92,9 +91,9 @@ pub trait HasherCusor{
     /// Seeks to a specific position in the slice and returns the hash (or None if the position is invalid)
     fn seek(&mut self, pos: usize) -> Option<usize>;
     /// Current position in the slice
-    fn pos(&self) -> usize;
+    fn peek_next_pos(&self) -> usize;
     /// Hash of the current position
-    fn hash(&self) -> usize;
+    fn peek_next_hash(&self) -> usize;
 }
 
 const HASH_MULTIPLIER_32_BIT: u32 = 1597334677;
@@ -253,10 +252,10 @@ impl<'a> HasherCusor for RollingHashCursor<'a> {
         self.rolling_hash.jump(&self.slice[pos..end_pos]);
         return Some(self.rolling_hash.hash());
     }
-    fn pos(&self) -> usize {
+    fn peek_next_pos(&self) -> usize {
         self.rolling_hash_start_pos
     }
-    fn hash(&self) -> usize {
+    fn peek_next_hash(&self) -> usize {
         self.rolling_hash.hash()
     }
 }
@@ -313,10 +312,10 @@ impl HasherCusor for SmallHashCursor<'_> {
         self.rolling_hash_start_pos = pos;
         Some(self.calc_checksum(pos))
     }
-    fn pos(&self) -> usize {
+    fn peek_next_pos(&self) -> usize {
         self.rolling_hash_start_pos
     }
-    fn hash(&self) -> usize {
+    fn peek_next_hash(&self) -> usize {
         self.cur_hash
     }
 }
@@ -327,55 +326,55 @@ impl HasherCusor for SmallHashCursor<'_> {
 #[cfg(test)]
 mod test_super {
     use super::*;
-    // #[test]
-    // fn test_initial_hash() {
-    //     let initial_data = b"hello world, this is a test of some hashing"; // Example data
-    //     let config = MediumHashConfig::new(100, 8);
-    //     let mh = RollingHash::new(&initial_data[..8],&config);
-    //     dbg!(mh.hash());
-    //     assert_eq!(mh.hash, config.calculate_large_checksum(&initial_data[..8]));
-    // }
+    #[test]
+    fn test_initial_hash() {
+        let initial_data = b"hello world, this is a test of some hashing"; // Example data
+        let config = RollingHashConfig::new(8);
+        let mh = RollingHasher::new(&initial_data[..8],&config);
+        dbg!(mh.hash());
+        assert_eq!(mh.hash, config.calculate_large_checksum(&initial_data[..8]));
+    }
 
-    // #[test]
-    // fn test_rolling_hash() {
-    //     let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
-    //     let config = MediumHashConfig::new(100, 8);
-    //     let mut mh = RollingHash::new(&initial_data[..8],&config);
-    //     let mut crsr = MediumHashCursor::new(initial_data,8,&config);
-    //     // Simulate a rolling window
-    //     let mut hash = config.calculate_large_checksum(&initial_data[..8]);
-    //     let (crsr_hash,_) = crsr.next().unwrap();
-    //     assert_eq!(crsr_hash, hash);
-    //     for i in 1..(initial_data.len() - 20) {
-    //         let old_char = initial_data[i - 1];
-    //         let new_char = initial_data[i + 7];
-    //         let expected_hash = config.calculate_large_checksum(&initial_data[i..i+8]);
-    //         hash = config.update_large_checksum(hash, old_char, new_char);
-    //         assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
-    //         mh.update(new_char);
-    //         assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
-    //         let (hash2,pos) = crsr.next().unwrap();
-    //         assert_eq!(pos,i, "HashCrsr wrong output position");
-    //         assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
-    //     }
-    // }
+    #[test]
+    fn test_rolling_hash() {
+        let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
+        let config = RollingHashConfig::new(8);
+        let mut mh = RollingHasher::new(&initial_data[..8],&config);
+        let mut crsr = RollingHashCursor::new(initial_data,8,&config);
+        // Simulate a rolling window
+        let mut hash = config.calculate_large_checksum(&initial_data[..8]);
+        let (crsr_hash,_) = crsr.next().unwrap();
+        assert_eq!(crsr_hash, hash);
+        for i in 1..(initial_data.len() - 20) {
+            let old_char = initial_data[i - 1];
+            let new_char = initial_data[i + 7];
+            let expected_hash = config.calculate_large_checksum(&initial_data[i..i+8]);
+            hash = config.update_large_checksum(hash, old_char, new_char);
+            assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
+            mh.update(new_char);
+            assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
+            let (hash2,pos) = crsr.next().unwrap();
+            assert_eq!(pos,i, "HashCrsr wrong output position");
+            assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
+        }
+    }
 
-    // #[test]
-    // fn test_hash_cursor() {
-    //     let data = b"hello world, this is a test of the rolling hash";
-    //     let config = MediumHashConfig::new(100, 8);
-    //     let mut cursor = MediumHashCursor::new(data,8,&config);
-    //     let mut answers = Vec::new();
-    //     for _ in 0..5{
-    //         let (hash,pos) = cursor.next().unwrap();
-    //         answers.push((hash,pos));
-    //     }
-    //     answers.sort_by(|a,b|a.0.cmp(&b.0));
-    //     for (hash,pos) in answers{
-    //         let new_hash = cursor.seek(pos).unwrap();
-    //         assert_eq!(hash,new_hash);
-    //     }
-    // }
+    #[test]
+    fn test_hash_cursor() {
+        let data = b"hello world, this is a test of the rolling hash";
+        let config = RollingHashConfig::new(8);
+        let mut cursor = RollingHashCursor::new(data,8,&config);
+        let mut answers = Vec::new();
+        for _ in 0..5{
+            let (hash,pos) = cursor.next().unwrap();
+            answers.push((hash,pos));
+        }
+        answers.sort_by(|a,b|a.0.cmp(&b.0));
+        for (hash,pos) in answers{
+            let new_hash = cursor.seek(pos).unwrap();
+            assert_eq!(hash,new_hash);
+        }
+    }
     // #[test]
     // fn test_size() {
 

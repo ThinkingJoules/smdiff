@@ -14,3 +14,4 @@ smdiff-decoder ={ path = "../smdiff-decoder" }
 smdiff-merger ={ path = "../smdiff-merger" }
 rand = "0.8.5"
 colored = "2.1.0"
+blake3 = {version = "1.5.1", features = ["rayon"]}

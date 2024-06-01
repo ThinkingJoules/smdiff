@@ -4,7 +4,7 @@ use std::io::{Cursor, Read, Seek};
 use std::path::Path;
 use std::time::Instant;
 
-use smdiff_encoder::EncoderConfig;
+use smdiff_encoder::{EncoderConfig, SrcMatcherConfig, TrgtMatcherConfig};
 use smdiff_reader::SectionReader;
 
 use crate::{Stats, DIR_PATH};
@@ -23,7 +23,7 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_copy_miss_step(16).format_segregated())?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().format_segregated().set_match_src(SrcMatcherConfig::comp_level(0)))?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
@@ -99,7 +99,7 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_copy_miss_step(1).set_match_target(true))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_match_src(SrcMatcherConfig::comp_level(9)).set_match_target(TrgtMatcherConfig::comp_level(9)))?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
@@ -175,7 +175,7 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_copy_miss_step(1).set_match_target(true))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().set_match_src(SrcMatcherConfig::comp_level(9)).set_match_target(TrgtMatcherConfig::comp_level(9)))?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);

@@ -1,6 +1,6 @@
 use smdiff_common::Format;
 use smdiff_decoder::zstd;
-use smdiff_encoder::{brotli::{BlockSize, BrotliEncoderOptions, CompressionMode, Quality, WindowSize}, EncoderConfig, SecondaryCompression};
+use smdiff_encoder::{brotli::{BlockSize, BrotliEncoderOptions, CompressionMode, Quality, WindowSize}, EncoderConfig, SecondaryCompression, SrcMatcherConfig, TrgtMatcherConfig};
 
 use std::{fs, io::Write, time::Duration};
 use std::io::{Cursor, Read, Seek};
@@ -10,11 +10,11 @@ use colored::*;
 use crate::{encode_test_gcc_2951_2952, encode_test_gcc_2952_2953, DIR_PATH};
 
 pub fn test_sec_comp_working() -> Result<(), Box<dyn std::error::Error>> {
-    let config = EncoderConfig::new(true, 4, Some(SecondaryCompression::Smdiff { copy_miss_step:4 }), Format::Segregated);
+    let config = EncoderConfig::default().format_segregated().set_sec_comp(SecondaryCompression::Smdiff(TrgtMatcherConfig::default()));
     println!("{:?}", config);
     encode_test_gcc_2951_2952(&config)?;
     encode_test_gcc_2952_2953(&config)?;
-    let config = EncoderConfig::new(true, 4, Some(SecondaryCompression::Zstd { level: 1 }), Format::Segregated);
+    let config = EncoderConfig::default().format_segregated().set_sec_comp(SecondaryCompression::Zstd { level: 1 });
     println!("{:?}", config);
     encode_test_gcc_2951_2952(&config)?;
     encode_test_gcc_2952_2953(&config)?;
@@ -23,7 +23,7 @@ pub fn test_sec_comp_working() -> Result<(), Box<dyn std::error::Error>> {
     options.block_size(BlockSize::worst());
     options.window_size(WindowSize::worst());
     options.mode(CompressionMode::Generic);
-    let config = EncoderConfig::new(true, 4, Some(SecondaryCompression::Brotli { options  }), Format::Segregated);
+    let config = EncoderConfig::default().format_segregated().set_sec_comp(SecondaryCompression::Brotli { options });
     println!("{:?}", config);
     encode_test_gcc_2951_2952(&config)?;
     encode_test_gcc_2952_2953(&config)?;
@@ -41,7 +41,7 @@ pub fn analyze_sec_comp_large_file_worst()-> Result<(), Box<dyn std::error::Erro
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::new(true, 16, None, Format::Segregated))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(0)))?;
     let duration = start.elapsed();
     let f_2952_bytes = trgt.into_inner();
     let mut decode_sm = Vec::new();
@@ -87,16 +87,16 @@ pub fn analyze_sec_comp_large_file_worst()-> Result<(), Box<dyn std::error::Erro
 
 
 
-    let config = EncoderConfig::new(true, 16, None, Format::Segregated);
+    let config = EncoderConfig::default().format_segregated().set_match_src(SrcMatcherConfig::comp_level(0)).set_match_target(TrgtMatcherConfig::comp_level(0));
     let r_none = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) (no sec)",(r_none[0].0, r_none[0].1, r_none[0].2)));
-    let config = EncoderConfig::new(true, 16, Some(SecondaryCompression::Smdiff { copy_miss_step:16 }), Format::Segregated);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Smdiff(TrgtMatcherConfig::comp_level(0)));
     let r_sm = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) + smdiff",(r_sm[0].0, r_sm[0].1, r_sm[0].2)));
-    let config = EncoderConfig::new(true, 16, Some(SecondaryCompression::Zstd { level: 1 }), Format::Segregated);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Zstd { level: 1 });
     let r_z = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) + zstd",(r_z[0].0, r_z[0].1, r_z[0].2)));
-    let config = EncoderConfig::new(true, 16, Some(SecondaryCompression::Brotli { options  }), Format::Segregated);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Brotli { options  });
     let r_b = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) + brotli",(r_b[0].0, r_b[0].1, r_b[0].2)));
     values.push(("smdiff(src+trgt) (no sec)",(r_none[1].0, r_none[1].1, r_none[1].2)));
@@ -118,7 +118,7 @@ pub fn analyze_sec_comp_large_file_best()-> Result<(), Box<dyn std::error::Error
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::new(true, 1, None, Format::Segregated))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(9)))?;
     let duration = start.elapsed();
     let f_2952_bytes = trgt.into_inner();
     let mut decode_sm = Vec::new();
@@ -164,16 +164,16 @@ pub fn analyze_sec_comp_large_file_best()-> Result<(), Box<dyn std::error::Error
 
 
 
-    let config = EncoderConfig::new(true, 1, None, Format::Segregated);
+    let config = EncoderConfig::default().format_segregated().set_match_src(SrcMatcherConfig::comp_level(9)).set_match_target(TrgtMatcherConfig::comp_level(9));
     let r_none = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) (no sec)",(r_none[0].0, r_none[0].1, r_none[0].2)));
-    let config = EncoderConfig::new(true, 1, Some(SecondaryCompression::Smdiff { copy_miss_step:1 }), Format::Segregated);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Smdiff(TrgtMatcherConfig::comp_level(9)));
     let r_sm = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) + smdiff",(r_sm[0].0, r_sm[0].1, r_sm[0].2)));
-    let config = EncoderConfig::new(true, 1, Some(SecondaryCompression::Zstd { level: 22 }), Format::Segregated);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Zstd { level: 22 });
     let r_z = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) + zstd",(r_z[0].0, r_z[0].1, r_z[0].2)));
-    let config = EncoderConfig::new(true, 1, Some(SecondaryCompression::Brotli { options  }), Format::Segregated);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Brotli { options  });
     let r_b = sec_comp_gcc_2951_2952(&config)?;
     values.push(("smdiff(src) + brotli",(r_b[0].0, r_b[0].1, r_b[0].2)));
     values.push(("smdiff(src+trgt) (no sec)",(r_none[1].0, r_none[1].1, r_none[1].2)));
@@ -196,7 +196,7 @@ fn sec_comp_gcc_2951_2952(config:&EncoderConfig)-> Result<[(Duration,Duration,us
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().set_match_target(false))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().no_match_target())?;
     let duration_1 = start.elapsed();
     let size_1 = patch.len();
     let f_2952_bytes = trgt.into_inner();
@@ -239,7 +239,7 @@ pub fn analyze_sec_comp_sentence_best()-> Result<(), Box<dyn std::error::Error>>
     let mut trgt = Cursor::new(trgt_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::new(true, 1, None, Format::Interleaved))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(9)))?;
     let duration = start.elapsed();
     let trgt_bytes = trgt.into_inner();
     let mut decode_sm = Vec::new();
@@ -285,16 +285,16 @@ pub fn analyze_sec_comp_sentence_best()-> Result<(), Box<dyn std::error::Error>>
 
 
 
-    let config = EncoderConfig::new(true, 1, None, Format::Interleaved);
+    let config = EncoderConfig::default().set_match_src(SrcMatcherConfig::comp_level(9)).set_match_target(TrgtMatcherConfig::comp_level(9));
     let r_none = sec_comp_sentence(&config)?;
     values.push(("smdiff(src) (no sec)",(r_none[0].0, r_none[0].1, r_none[0].2)));
-    let config = EncoderConfig::new(true, 1, Some(SecondaryCompression::Smdiff { copy_miss_step:1 }), Format::Interleaved);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Smdiff(TrgtMatcherConfig::comp_level(9)));
     let r_sm = sec_comp_sentence(&config)?;
     values.push(("smdiff(src) + smdiff",(r_sm[0].0, r_sm[0].1, r_sm[0].2)));
-    let config = EncoderConfig::new(true, 1, Some(SecondaryCompression::Zstd { level: 22 }), Format::Interleaved);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Zstd { level: 22 });
     let r_z = sec_comp_sentence(&config)?;
     values.push(("smdiff(src) + zstd",(r_z[0].0, r_z[0].1, r_z[0].2)));
-    let config = EncoderConfig::new(true, 1, Some(SecondaryCompression::Brotli { options  }), Format::Interleaved);
+    let config = config.clone().set_sec_comp(SecondaryCompression::Brotli { options  });
     let r_b = sec_comp_sentence(&config)?;
     values.push(("smdiff(src) + brotli",(r_b[0].0, r_b[0].1, r_b[0].2)));
     values.push(("smdiff(src+trgt) (no sec)",(r_none[1].0, r_none[1].1, r_none[1].2)));
@@ -312,7 +312,7 @@ fn sec_comp_sentence(config:&EncoderConfig)-> Result<[(Duration,Duration,usize);
     let mut trgt = Cursor::new(trgt_bytes);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().set_match_target(false))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().no_match_target())?;
     let duration_1 = start.elapsed();
     let size_1 = patch.len();
     let trgt_bytes = trgt.into_inner();

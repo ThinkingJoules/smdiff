@@ -1,16 +1,16 @@
 use smdiff_common::{Copy, CopySrc, MAX_INST_SIZE, MAX_RUN_LEN};
 
-use crate::{add::make_add_ops, encoder::{EncoderConfig, InnerOp}, Op};
+use crate::{encoder::{GenericEncoderConfig, InnerOp}, Op};
 
 
 //this is sort of naive now. It could have better address cost optimization checking.
-pub fn translate_inner_ops<'a>(encoder_config:&EncoderConfig,src:&'a [u8],trgt:&'a [u8], mut ops: Vec<InnerOp>)->Vec<Op<'a>>{
+pub fn translate_inner_ops<'a>(encoder_config:&GenericEncoderConfig,trgt:&'a [u8], mut ops: Vec<InnerOp>)->Vec<Op<'a>>{
     //we are going to do two passes, one for adjusting the ops to be non-overlapping
     //the second for converting them to windows and Op structs for smdiff.
     let src_min_match = encoder_config.match_src.as_ref()
-        .map(|a|a.hash_win_len.unwrap()).unwrap_or(usize::MAX);
+        .map(|a|a.hash_win_len.unwrap()).unwrap_or(9);
     let trgt_min_match = encoder_config.match_trgt.as_ref()
-        .map(|a|a.hash_win_len.unwrap()).unwrap_or(usize::MAX);
+        .map(|a|a.hash_win_len.unwrap()).unwrap_or(4);
     //to avoid another allocation, removed ops will have their length set to 0
     let ops_len = ops.len();
     let mut one = 0;
@@ -55,12 +55,13 @@ pub fn translate_inner_ops<'a>(encoder_config:&EncoderConfig,src:&'a [u8],trgt:&
             continue;
         }
         //if we get here, we have two overlapping ops that should be able to be made coincident.
-        assert!(two_end >= one_end);
+        assert!(two_end >= one_end) ;
         // Calculate the midpoint of the overlapping region
         let midpoint = two_p + (one_end - two_p) / 2;
 
         ops.get_mut(one).unwrap().set_len(midpoint - one_p);
         ops.get_mut(two).unwrap().set_o_pos(midpoint);
+        debug_assert!(ops[one].o_pos() + ops[one].len() == *ops[two].o_pos(), "Ops are not coincident!");
         one = two;
     }
 
@@ -80,6 +81,7 @@ pub fn translate_inner_ops<'a>(encoder_config:&EncoderConfig,src:&'a [u8],trgt:&
                 make_copy_ops(CopySrc::Dict, start, length, &mut out_ops);
             },
             InnerOp::MatchTrgt { start, length, .. } =>{
+                assert!(out_pos > start+length, "MatchTrgt exceeds output position");
                 make_copy_ops(CopySrc::Output, start, length, &mut out_ops);
             },
             InnerOp::Run { byte, length, .. } => {
@@ -88,7 +90,30 @@ pub fn translate_inner_ops<'a>(encoder_config:&EncoderConfig,src:&'a [u8],trgt:&
         }
         out_pos += len;
     }
+    if trgt.len() > out_pos {
+        make_add_ops(&trgt[out_pos..], &mut out_ops);
+    }
     out_ops
+}
+
+
+pub fn make_add_ops<'a>(bytes: &'a [u8],output: &mut Vec<Op<'a>>){
+    let total_len = bytes.len();
+    if total_len == 1{//emit a run of len 1
+        output.push(Op::Run(smdiff_common::Run{len: 1, byte: bytes[0]}));
+        return;
+    }
+    let mut processed = 0;
+    loop{
+        if processed == total_len{
+            break;
+        }
+        let to_add = total_len - processed;
+        let chunk_size = to_add.min(MAX_INST_SIZE as usize);
+        let op = crate::Add{bytes: &bytes[processed..processed+chunk_size]};
+        processed += chunk_size;
+        output.push(Op::Add(op));
+    }
 }
 
 fn make_copy_ops(src: CopySrc, start:usize, len:usize, output: &mut Vec<Op>){
@@ -103,11 +128,11 @@ fn make_copy_ops(src: CopySrc, start:usize, len:usize, output: &mut Vec<Op>){
         processed += chunk_size;
     };
 }
-
+const RUN_LIMIT: usize = (MAX_RUN_LEN as usize) * 6;
+const COPY_LIMIT: usize = RUN_LIMIT/2;
 fn make_run_ops(byte:u8, len:usize, run_start_pos:usize, output: &mut Vec<Op>){
-    let mut processed = 0;
-    let run_limit = (MAX_RUN_LEN as usize) * 6;
-    if len < run_limit {
+    if len < RUN_LIMIT {
+        let mut processed = 0;
         while processed < len {
             let remaining = len - processed;
             let chunk_size = (MAX_RUN_LEN as usize).min(remaining);
@@ -117,41 +142,20 @@ fn make_run_ops(byte:u8, len:usize, run_start_pos:usize, output: &mut Vec<Op>){
         };
     }else{
         //we can use one or more copies on 3 runs.
-        let mut stack = Vec::new();
-        let mut max_copy = run_limit/2;
-        while processed < len {
-            let remaining = len - processed;
-            let split = split_round_down_mod(remaining, MAX_RUN_LEN as usize).max(max_copy);
-            let copy_half = remaining - split;
-            let take = copy_half.min(max_copy);
-            max_copy = max_copy+take;
-            stack.push(take);
-            processed += take;
-            if len - processed == max_copy {
-                //we need to emit the three runs, then make the copies from the stack
-                let op = Op::Run(smdiff_common::Run{byte, len: MAX_RUN_LEN});
-                output.extend(std::iter::repeat_with(|| op.clone()).take(3));
-                let mut cur_o = run_start_pos + max_copy;
-                for amt in stack.into_iter(){//start with the smallest copies at the end.
-                    //the addr should always be the run_start_pos.
-                    //we keep reusing a larger and larger block of run values.
-                    assert!(run_start_pos + amt <= cur_o, "{} < {}",run_start_pos + amt, cur_o);
-                    let op = Op::Copy(Copy{src: CopySrc::Output, addr: run_start_pos as u64, len: amt as u16});
-                    output.push(op);
-                    cur_o += amt;
-                }
-                return;
-            }
-        };
-        unreachable!()
-    }
-}
+        //we need to emit the three runs, then make the copies from the stack
+        output.extend(std::iter::repeat_with(|| Op::Run(smdiff_common::Run{byte, len: MAX_RUN_LEN})).take(3));
 
-#[inline]
-fn split_round_down_mod(value: usize, modulo: usize) -> usize {
-    let multiples = value / modulo;
-    let div_2 = multiples / 2;
-    div_2 * modulo
+        let copy_bytes = len - COPY_LIMIT;
+        let mut processed = 0;
+        let mut max_copy_size = COPY_LIMIT;
+        while processed < copy_bytes{
+            let copy_size = max_copy_size.min(copy_bytes - processed).min(MAX_INST_SIZE);
+            let op = Op::Copy(Copy{src: CopySrc::Output, addr: run_start_pos as u64, len: copy_size as u16});
+            output.push(op);
+            processed += copy_size;
+            max_copy_size += copy_size;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -195,17 +199,23 @@ mod tests {
     }
 
     #[test]
+    fn test_large_run_needing_copies2() {
+        let mut output = Vec::new();
+        make_run_ops(0xBB, 414, 0, &mut output);
+        assert_eq!(output.len(), 5); // Should fit exactly into 3 maximum-length runs + 2 Copy of all of them.
+        for op in &output[..3] {
+            assert!(matches!(op, Op::Run(smdiff_common::Run { byte: 0xBB, len: MAX_RUN_LEN })));
+        }
+        let copy = &output[3];
+        assert!(matches!(copy, Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 186 })),"{:?}",copy);
+        let copy = &output[4];
+        assert!(matches!(copy, Op::Copy(Copy { src: CopySrc::Output, addr: 0, len: 42 })),"{:?}",copy);
+    }
+
+    #[test]
     fn test_zero_length() {
         let mut output = Vec::new();
         make_run_ops(0xDD, 0, 0, &mut output);
         assert!(output.is_empty());
-    }
-    #[test]
-    fn test_divide_and_subtract() {
-        assert_eq!(split_round_down_mod(150, 62), 62);
-        assert_eq!(split_round_down_mod(286, 62), 124);
-        assert_eq!(split_round_down_mod(124, 62), 62);
-        assert_eq!(split_round_down_mod(48, 10), 20);
-        assert_eq!(split_round_down_mod(18, 7), 7);
     }
 }

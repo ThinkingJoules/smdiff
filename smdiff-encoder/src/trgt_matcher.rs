@@ -23,7 +23,7 @@ impl<'a> TrgtMatcher<'a> {
         }
     }
     pub(crate) fn seek(&mut self, pos:usize){
-        assert!(self.hasher.pos() <= pos);
+        assert!(self.hasher.peek_next_pos() <= pos);
         if let Some(hash) = self.hasher.seek(pos) {
             self.store(hash,pos)
         }
@@ -61,6 +61,9 @@ impl<'a> TrgtMatcher<'a> {
                 if total_post_match > best_len{
                     best_len = total_post_match;
                     best = Some((start_pos,total_post_match));
+                    if best_len >= self.compress_early_exit{
+                        break;
+                    }
                 }
                 chain -= 1;
             }else{break;}
@@ -78,8 +81,8 @@ impl<'a> TrgtMatcher<'a> {
 
 
 
-pub const DEFAULT_TRGT_WIN_SIZE: usize = 1 << 23;
-pub const DEFAULT_PREV_SIZE: usize = 1 << 18;
+const DEFAULT_TRGT_WIN_SIZE: usize = 1 << 23;
+const DEFAULT_PREV_SIZE: usize = 1 << 18;
 #[derive(Debug, Clone)]
 pub struct TrgtMatcherConfig{
     /// If the small match (in trgt) is >= than this we stop searching for better matches and emit this one.
@@ -91,30 +94,27 @@ pub struct TrgtMatcherConfig{
     pub prev_table_capacity: Option<usize>,
     pub hash_win_len: Option<usize>
 }
-impl TrgtMatcherConfig {
-    ///Creates a new TrgtMatcherConfig with the given parameters.
-    /// compress_early_exit: If the small match (in trgt) is >= than this we stop searching for better matches and emit this one.
-    /// chain_check: Max number of entries to check in the chain during matching.
-    /// table_capacity: Advanced setting, leave as None for default.
-    pub fn new(compress_early_exit: usize, chain_check: usize, prev_table_capacity: Option<usize>,hash_win_len:Option<usize>) -> Self {
-        Self { compress_early_exit, chain_check, prev_table_capacity,hash_win_len}
-    }
 
+impl Default for TrgtMatcherConfig {
+    fn default() -> Self {
+        Self::comp_level(3)
+    }
+}
+impl TrgtMatcherConfig {
     ///Creates a new TrgtMatcherConfig with the given compression level.
     /// level: The compression level to use. Must be between 0 and 9.
     /// The higher the level the more accurate the matches but slower.
-    pub fn new_from_compression_level(level:usize)->Self{
+    pub fn comp_level(level:usize)->Self{
         assert!(level <= 9);
-        let compress_early_exit = 6 + (level*64 / 9);
-        let chain_check = 1 + ((65 * level) / 9);
-        let extra_short_matches = level >= 6;
+        let compress_early_exit = 6 + (level*64 / 9); // 6..=70
+        let chain_check = 1 + ((65 * level) / 9); // 1..=66
         Self { compress_early_exit, chain_check, prev_table_capacity: None , hash_win_len: None}
     }
     pub fn with_table_capacity(mut self, table_capacity:usize)->Self{
         self.prev_table_capacity = Some(table_capacity);
         self
     }
-    pub fn build<'a>(&mut self,trgt:&'a [u8],trgt_start_pos:usize)->TrgtMatcher<'a>{
+    pub(crate) fn build<'a>(&mut self,trgt:&'a [u8],trgt_start_pos:usize)->TrgtMatcher<'a>{
         let Self { compress_early_exit, chain_check, prev_table_capacity,hash_win_len } = self;
         let effective_len = trgt.len() - trgt_start_pos;
         let prev_table_capacity = prev_table_capacity.get_or_insert(DEFAULT_PREV_SIZE.min(effective_len));

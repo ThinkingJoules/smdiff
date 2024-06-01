@@ -13,7 +13,13 @@ impl PrevList {
     /// Capacity must be a power of 2.
     fn new(capacity: usize) -> Self {
         //assert that capacity is a power of 2
-        assert_eq!(capacity & (capacity - 1), 0);
+        if capacity == 0 {
+            return Self {
+                positions: Vec::new(),
+                mod_mask: 0,
+            };
+        }
+        assert_eq!(capacity & (capacity - 1), 0, "Prev Table Capacity ({}) is not a power of 2", capacity);
         Self {
             positions: vec![0; capacity],
             mod_mask: capacity - 1,
@@ -23,6 +29,9 @@ impl PrevList {
     /// last_pos: The current position (BUCKET_VALUE_OFFSET is already subtracted)
     /// Returns the previous position with BUCKET_VALUE_OFFSET subtracted. (or none if bucket value == 0)
     fn get_prev_pos(&self, last_pos: usize) -> Option<usize> {
+        if self.positions.is_empty() {
+            return None;
+        }
         let prev_idx_value = self.positions[last_pos & self.mod_mask];
         if prev_idx_value == 0 {// End of chain or invalid position
             return None;
@@ -33,6 +42,7 @@ impl PrevList {
     /// key: The parent position in the chain (new head) (BUCKET_VALUE_OFFSET is already subtracted)
     /// new_pos: The new position to insert
     fn insert(&mut self, key_position: usize, position: usize) {
+        if self.positions.is_empty() {return;}
         *self.positions.get_mut(key_position & self.mod_mask).unwrap() = position + BUCKET_VALUE_OFFSET;
     }
 }
@@ -45,6 +55,14 @@ pub struct PrevPositionIterator<'a> {
 
 impl<'a> PrevPositionIterator<'a> {
     fn new(list: &'a PrevList, last_pos: usize,cur_out_pos:usize) -> Self {
+        if list.positions.is_empty() {
+            return Self {
+                list,
+                last_pos,
+                cur_out_pos,
+                mod_mask: 0,
+            };
+        }
         Self {
             list,
             last_pos,
