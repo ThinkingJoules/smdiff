@@ -280,6 +280,7 @@ impl<'a> SmallHashCursor<'a> {
         crsr.cur_hash = crsr.calc_checksum(0);
         crsr
     }
+    // #[cfg(target_pointer_width = "32")]
     fn calc_checksum(&self,position:usize) -> usize {
         let state = if self.win_size == 4 {
             u32::from_ne_bytes(self.slice[position..position + 4].try_into().unwrap())
@@ -288,6 +289,15 @@ impl<'a> SmallHashCursor<'a> {
         };
         state.wrapping_mul(HASH_MULTIPLIER_32_BIT) as usize
     }
+    // #[cfg(target_pointer_width = "64")]
+    // fn calc_checksum(&self,position:usize) -> usize {
+    //     let state = if self.win_size == 4 {
+    //         u32::from_ne_bytes(self.slice[position..position + 4].try_into().unwrap())
+    //     } else {
+    //         u32::from_be_bytes([self.slice[position], self.slice[position+1], self.slice[position+2], 0])
+    //     };
+    //     (state.wrapping_mul(HASH_MULTIPLIER_32_BIT) as usize) << 32 //move bits to the high end
+    // }
 }
 impl HasherCusor for SmallHashCursor<'_> {
     fn next(&mut self) -> Option<(usize, usize)> {
@@ -310,7 +320,8 @@ impl HasherCusor for SmallHashCursor<'_> {
             return None;
         }
         self.rolling_hash_start_pos = pos;
-        Some(self.calc_checksum(pos))
+        self.cur_hash = self.calc_checksum(pos);
+        Some(self.cur_hash)
     }
     fn peek_next_pos(&self) -> usize {
         self.rolling_hash_start_pos
@@ -325,6 +336,8 @@ impl HasherCusor for SmallHashCursor<'_> {
 
 #[cfg(test)]
 mod test_super {
+    use crate::hashmap::{BasicHashTable, HashTable};
+
     use super::*;
     #[test]
     fn test_initial_hash() {
@@ -361,6 +374,51 @@ mod test_super {
 
     #[test]
     fn test_hash_cursor() {
+        let data = b"hello world, this is a test of the rolling hash";
+        let config = RollingHashConfig::new(8);
+        let mut cursor = RollingHashCursor::new(data,8,&config);
+        let mut answers = Vec::new();
+        for _ in 0..5{
+            let (hash,pos) = cursor.next().unwrap();
+            answers.push((hash,pos));
+        }
+        answers.sort_by(|a,b|a.0.cmp(&b.0));
+        for (hash,pos) in answers{
+            let new_hash = cursor.seek(pos).unwrap();
+            assert_eq!(hash,new_hash);
+        }
+    }
+
+    #[test]
+    fn test_rolling_shash() {
+        let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
+        let config = RollingHashConfig::new(4);
+        let mut mh = RollingHasher::new(&initial_data[..4],&config);
+        let mut crsr = SmallHashCursor::new(initial_data,4);
+        let mut map = BasicHashTable::new(1<<25, 1<<16, true);
+        // Simulate a rolling window
+        let mut hash = config.calculate_large_checksum(&initial_data[..4]);
+        let (crsr_hash,_) = crsr.next().unwrap();
+        //assert_eq!(crsr_hash, hash);
+        for i in 1..(initial_data.len() - 20) {
+            let old_char = initial_data[i - 1];
+            let new_char = initial_data[i + 3];
+            let expected_hash = config.calculate_large_checksum(&initial_data[i..i+4]);
+            hash = config.update_large_checksum(hash, old_char, new_char);
+            //assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
+            mh.update(new_char);
+            //assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
+            let (hash2,pos) = crsr.next().unwrap();
+            dbg!(map.calc_index(hash2));
+            dbg!(map.calc_index(hash));
+            dbg!(hash2,pos,expected_hash);
+            //assert_eq!(pos,i, "HashCrsr wrong output position");
+            //assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
+        }
+    }
+
+    #[test]
+    fn test_shash_cursor() {
         let data = b"hello world, this is a test of the rolling hash";
         let config = RollingHashConfig::new(8);
         let mut cursor = RollingHashCursor::new(data,8,&config);

@@ -41,6 +41,7 @@ impl PrevList {
     /// Inserts a new position into the chain.
     /// key: The parent position in the chain (new head) (BUCKET_VALUE_OFFSET is already subtracted)
     /// new_pos: The new position to insert
+    // #[inline(always)]
     fn insert(&mut self, key_position: usize, position: usize) {
         if self.positions.is_empty() {return;}
         *self.positions.get_mut(key_position & self.mod_mask).unwrap() = position + BUCKET_VALUE_OFFSET;
@@ -108,29 +109,39 @@ pub trait HashTable {
     /// Inserts a position into the chain at the given index.
     fn insert(&mut self, idx: usize, start_pos: usize);
 }
+#[derive(Clone, Debug)]
 pub(crate) struct BasicHashTable {
     table_size: usize,       // Number of slots in the hash table
-    shift_amount: usize,    // Bit shift amount for hash reduction
-    mod_mask: usize,          // Bitmask for hash table indexing
+    shift_amount: usize,     // Bit shift amount for hash reduction
+    mod_mask: usize,         // Bitmask for hash table indexing
     buckets: Vec<usize>,
     prev_list: PrevList,
 }
 impl BasicHashTable{
-    pub(crate) fn new(num_slots: usize, prev_start_capacity: usize) -> Self {
+    pub(crate) fn new(num_slots: usize, prev_start_capacity: usize,checksum_is_32_bit:bool) -> Self {
         let num_bits = determine_hash_table_size_bits(num_slots);
         let table_size = 1 << num_bits;
+        let mod_mask = table_size - 1;
+        //let shift_amount = (std::mem::size_of::<usize>() * 8) - num_bits;
+        let base_shift = if checksum_is_32_bit {4} else {std::mem::size_of::<usize>()};
+        let shift_amount = (base_shift * 8) - num_bits;
+        dbg!(table_size, num_bits, num_slots,mod_mask,shift_amount);
+        //let _start = std::time::Instant::now();
+        let prev_list = PrevList::new(prev_start_capacity);
+        //println!("PrevList creation took: {:?}", _start.elapsed());
+        let buckets = vec![0; table_size];
         Self {
-            mod_mask: table_size - 1,
+            mod_mask,
             table_size,
-            shift_amount: (std::mem::size_of::<usize>() * 8) - num_bits,
-            buckets: vec![0; table_size],
-            prev_list: PrevList::new(prev_start_capacity),
+            shift_amount,
+            buckets,
+            prev_list,
         }
     }
 }
 impl HashTable for BasicHashTable {
     fn calc_index(&self, checksum: usize) -> usize {
-        get_bucket_idx(checksum, self.shift_amount, self.mod_mask, self.table_size)
+        get_bucket_idx(checksum, self.shift_amount, self.mod_mask)
     }
     fn get_last_pos(&self,idx:usize)->Option<usize>{
         let last_pos = self.buckets[idx];
@@ -139,7 +150,6 @@ impl HashTable for BasicHashTable {
         }
         Some(last_pos - BUCKET_VALUE_OFFSET)
     }
-
     fn insert(&mut self, idx: usize, position: usize) {
         let idx_value = self.buckets[idx];
         if !self.prev_list.positions.is_empty() && idx_value != 0{
@@ -160,8 +170,8 @@ fn determine_hash_table_size_bits(slots: usize) -> usize {
     while i <= std::mem::size_of::<usize>() * 8 && slots >= (1 << i) {
         i += 1;
     }
-    i - 1 // Subtract 1 to get the correct number of bits
+    i - 1
 }
-fn get_bucket_idx(checksum: usize, shift_amt:usize, mod_mask:usize,num_buckets:usize) -> usize {
-   (checksum >> shift_amt).wrapping_pow((checksum & mod_mask) as u32) % num_buckets
+fn get_bucket_idx(checksum: usize, shift_amt:usize, mod_mask:usize) -> usize {
+   (checksum >> shift_amt) ^ (checksum & mod_mask)
 }

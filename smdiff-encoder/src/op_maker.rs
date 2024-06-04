@@ -81,7 +81,7 @@ pub fn translate_inner_ops<'a>(encoder_config:&GenericEncoderConfig,trgt:&'a [u8
                 make_copy_ops(CopySrc::Dict, start, length, &mut out_ops);
             },
             InnerOp::MatchTrgt { start, length, .. } =>{
-                assert!(out_pos > start+length, "MatchTrgt exceeds output position");
+                assert!(start+length <= out_pos, "MatchTrgt exceeds output position {} >= {}", out_pos, start+length);
                 make_copy_ops(CopySrc::Output, start, length, &mut out_ops);
             },
             InnerOp::Run { byte, length, .. } => {

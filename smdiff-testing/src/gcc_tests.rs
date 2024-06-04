@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 use colored::*;
 use smdiff_common::MAX_INST_SIZE;
-use smdiff_encoder::{EncoderConfig, SrcMatcherConfig};
+use smdiff_encoder::{EncoderConfig, SrcMatcherConfig, TrgtMatcherConfig};
 
 use crate::DIR_PATH;
 
@@ -250,15 +250,25 @@ pub fn new_encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> 
         &mut src,
         &mut trgt,
         &mut patch,
-        &EncoderConfig::default().set_match_src(
-            SrcMatcherConfig {
-                l_step: 2,
-                chain_check: 100,
-                prev_table_capacity: None,
-                max_src_win_size: Some(1 << 21),//None, //Some(1 << 24),
-                hash_win_len:Some(9)
-            })
-        )?;
+        &EncoderConfig::default()
+
+        .no_match_src().set_match_target(TrgtMatcherConfig {
+            compress_early_exit: 70,
+            chain_check: 44,
+            prev_table_capacity: None,
+            hash_win_len: Some(4)
+        })
+
+
+        // .set_match_src(
+        //     SrcMatcherConfig {
+        //         l_step: 1,
+        //         chain_check: 10,
+        //         prev_table_capacity: Some(1 << 16),
+        //         max_src_win_size: Some(1 << 26),//None, //Some(1 << 24),
+        //         hash_win_len:Some(8)
+        //     }).set_lazy_escape_len(90)
+        ).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC only: {}", patch.len());

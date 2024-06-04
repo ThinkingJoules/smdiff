@@ -1,7 +1,7 @@
 
 use std::io::Write;
 
-use encoder::GenericEncoderConfig;
+use encoder::{GenericEncoderConfig, LargerTrgtNaiveTests};
 use op_maker::translate_inner_ops;
 use smdiff_common::{AddOp, Copy, CopySrc, Format, Run, SectionHeader, MAX_INST_SIZE, MAX_WIN_SIZE};
 use smdiff_writer::{write_section_header, write_ops};
@@ -98,6 +98,13 @@ pub struct EncoderConfig {
     /// Default Value: MAX_WIN_SIZE
     /// The minimum value is MAX_INST_SIZE.
     pub output_segment_size: usize,
+    /// The types of naive tests to run.
+    /// Default Value: None
+    pub naive_tests: Option<LargerTrgtNaiveTests>,
+    /// The length of a match that will end the lazy matching sequence.
+    /// Default Value: Some(45)
+    pub lazy_escape_len: Option<usize>,
+
 }
 
 impl EncoderConfig {
@@ -136,15 +143,29 @@ impl EncoderConfig {
         self.match_trgt = Some(config);
         self
     }
+    pub fn set_output_segment_size(mut self, size: usize) -> Self {
+        self.output_segment_size = size;
+        self
+    }
+    pub fn set_naive_tests(mut self, tests: LargerTrgtNaiveTests) -> Self {
+        self.naive_tests = Some(tests);
+        self
+    }
+    pub fn set_lazy_escape_len(mut self, len: usize) -> Self {
+        self.lazy_escape_len = Some(len);
+        self
+    }
 }
 impl Default for EncoderConfig {
     fn default() -> Self {
         Self {
             match_src: Some(SrcMatcherConfig::comp_level(3)),
+            output_segment_size: MAX_WIN_SIZE,
+            format: Format::Interleaved,
             match_trgt: None,
             sec_comp: None,
-            format: Format::Interleaved,
-            output_segment_size: MAX_WIN_SIZE,
+            naive_tests: None,
+            lazy_escape_len: None,
         }
     }
 }
@@ -156,13 +177,13 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: &mut R, o
     output.read_to_end(&mut trgt_bytes)?;
     let src = src_bytes.as_slice();
     let trgt = trgt_bytes.as_slice();
-    let EncoderConfig { match_src, match_trgt, sec_comp, format,output_segment_size} = config.clone();
+    let EncoderConfig { match_src, match_trgt, sec_comp, format,output_segment_size, naive_tests, lazy_escape_len } = config.clone();
     let segment_size = output_segment_size.min(MAX_WIN_SIZE).max(MAX_INST_SIZE);
     let mut inner_config = GenericEncoderConfig{
         match_trgt,
         match_src,
-        lazy_escape_len: 90,
-        naive_tests: None,
+        lazy_escape_len,
+        naive_tests,
     };
     dbg!(&inner_config);
     let segments = encoder::encode_inner(&mut inner_config, src, trgt);
@@ -264,6 +285,14 @@ fn make_segments(ops: &[Op], segment_size: usize) -> Vec<SectionHeader> {
     segments
 }
 
+fn max_unique_substrings_gt_hash_len(hash_win_len: usize, win_size: usize, l_step: usize) -> usize {
+    let m = win_size / l_step;
+    let mut x = 0;
+    while m / (hash_win_len + x) > 256usize.pow(x as u32) - 1 {
+        x += 1;
+    }
+    std::cmp::min(m / (hash_win_len + x),256usize.pow(x as u32))
+}
 
 /// Returns the cost of the next address based on the absolute distance from `cur_addr`.
 fn _addr_cost(cur_addr: u64, next_addr: u64) -> isize {
@@ -339,3 +368,37 @@ fn _addr_cost(cur_addr: u64, next_addr: u64) -> isize {
 // fn size_cost(size: usize) -> isize {
 //     -((size > 62) as isize) - (size > 317) as isize
 // }
+
+#[cfg(test)]
+mod test_super {
+    use super::*;
+
+    #[test]
+    fn test_calculate_chain_len() {
+        let test_cases = [
+            (3, 1 << 26, 2, 4),
+            (5, 1 << 26, 2, 4),
+            (7, 1 << 26, 2, 4),
+            (9, 1 << 26, 2, 4),
+            (4, 1 << 28, 2, 4),
+            (5, 1 << 28, 2, 4),
+            (6, 1 << 28, 2, 4),
+            (7, 1 << 28, 2, 4),
+            (8, 1 << 28, 2, 4),
+            (3, 1 << 7, 2, 4),
+            (4, 16_383, 2, 4),
+            (5, 2_097_151, 2, 4),
+            (6, 6_998_841, 2, 4),
+            (7, 23_541_202, 2, 4),
+            (8, 79_182_851, 2, 4),
+        ];
+
+        for (hash_win_len, win_size, l_step, _expected_chain_len) in test_cases {
+            let chain_len = max_unique_substrings_gt_hash_len(hash_win_len, win_size, l_step);
+            println!("hash_win_len={}, win_size={}, l_step={}, chain_len={} ({})", hash_win_len, win_size, l_step, chain_len,(chain_len + chain_len/2).next_power_of_two()>>1);
+            // assert_eq!(chain_len, expected_chain_len,
+            //            "Failed for hash_win_len={}, win_size={}, l_step={}",
+            //            hash_win_len, win_size, l_step);
+        }
+    }
+}
