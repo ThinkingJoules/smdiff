@@ -1,15 +1,19 @@
+//! This lib is used to *construct* valid SMDIFF format delta files.
+//! This is *not* an encoder.
+//! However, if you did write an encoder this would help you write the ops to a file.
+use smdiff_common::{diff_addresses_to_i64, size_routine, write_i_varint, write_u16, write_u8, write_u_varint, AddOp, Copy, CopySrc, Format, Op, SectionHeader, Size, MAX_WIN_SIZE, SECTION_COMPRESSION_RSHIFT, SECTION_CONTINUE_BIT, SECTION_FORMAT_BIT, SIZE_MASK};
 
-use smdiff_common::{diff_addresses_to_i64, size_routine, write_i_varint, write_u16, write_u8, write_u_varint, AddOp, Copy, CopySrc, Format, Op, Size, SectionHeader, MAX_WIN_SIZE, SIZE_MASK};
 
-
-
+/// Used to write the header to the section.
+/// * `header` - The header to write.
+/// * `writer` - The writer to write to.
 pub fn write_section_header<W: std::io::Write>(header: &SectionHeader, writer:&mut W) -> std::io::Result<()> {
-    let mut cntl_byte = header.compression_algo << 3;
+    let mut cntl_byte = header.compression_algo << SECTION_COMPRESSION_RSHIFT;
     if let Format::Segregated = header.format {
-        cntl_byte |= 0b0100_0000;  // Set format bit
+        cntl_byte |= SECTION_FORMAT_BIT;  // Set format bit
     }
     if header.more_sections{
-        cntl_byte |= 0b1000_0000; // Set continuation bit
+        cntl_byte |= SECTION_CONTINUE_BIT; // Set continuation bit
     }
     write_u8(writer, cntl_byte)?;
     write_u_varint(writer, header.num_operations as u64)?;
@@ -23,9 +27,11 @@ pub fn write_section_header<W: std::io::Write>(header: &SectionHeader, writer:&m
     Ok(())
 }
 
-
+/// Used to write just the ops for the section.
+/// * `ops` - The operations to write.
+/// * `header` - The header for the section. This must match the contents of the ops.
+/// * `writer` - The writer to write to.
 pub fn write_ops<W: std::io::Write,A:AddOp>(ops: &[Op<A>], header:&SectionHeader, writer: &mut W) -> std::io::Result<()> {
-    // if output size is > MAX_WIN_SIZE, return error
     if header.output_size as usize > MAX_WIN_SIZE{
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Output size is greater than MAX_WIN_SIZE"));
     }
