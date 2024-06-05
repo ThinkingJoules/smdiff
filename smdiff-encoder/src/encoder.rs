@@ -157,11 +157,11 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
 
 
     //now we decide our matcher configs, at least one of these will be Some.
-    let start = std::time::Instant::now();
+    let _start = std::time::Instant::now();
     let mut trgt_matcher = config.match_trgt.as_mut().map(|c| c.build(trgt, cur_o_pos));
     let mut src_matcher = config.match_src.as_mut().map(|c| c.build(src, cur_o_pos, trgt_len));
-    let elapsed = start.elapsed();
-    //dbg!(elapsed);
+    // let _elapsed = _start.elapsed();
+    // dbg!(_elapsed);
     let lazy_escape_len = config.lazy_escape_len.unwrap_or(90);
 
     let small_len = trgt_matcher.as_ref()
@@ -177,7 +177,7 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
     let mut run_byte = 0;
     let mut state = EncoderState::StartNewMatch;
     //now we start the main loop.
-    let start = std::time::Instant::now();
+    let _start = std::time::Instant::now();
     loop {
         //first we see if we are out of data.
         if cur_o_pos + min_match_value >= max_trgt_match_len {
@@ -298,8 +298,8 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
             },
         }
     }
-    let elapsed = start.elapsed();
-    //dbg!(elapsed);
+    // let _elapsed = _start.elapsed();
+    // dbg!(_elapsed);
     assert!(cur_o_pos<=trgt_len);
     if max_trgt_match_len < trgt_len{
         //if we had prepended naive test, we need to place all of the src at the end.

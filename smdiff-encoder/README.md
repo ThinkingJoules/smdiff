@@ -1,13 +1,10 @@
 # SMDIFF Encoder
-This is mostly focusing on files less than 16mb.
-
-This will properly diff large files, but it is a massive memory hog.
-
-Assume about 20x whatever your two documents are: So 100mb (50+50) is about 2gb of ram to generate a patch.
-
-This is wicked fast. Faster at generating a delta using xdelta3 or open-vcdiff (google). But I'm sure they actually care about memory usage.
-
-Perhaps one day I can try to be more cognizant of memory usage, until then, just make sure you have some RAM.
+A decent encoder for a second attempt. My first attempt was naive and I learned a lot while doing it. I tried to apply this in the second iteration of this encoder. This one is about twice as fast my first attempt and uses *way* less memory. However, it is not as good as xdelta3 for speed or matches, but it is in readable fully safe Rust. From rough benchmarks it is about 3 times slower than xdelta3 and matches within about 20-30% of xdelta3 (with no secondary compressor). So not great, but this is pretty young code. Secondary compressors bring it closer to being inline with xd3 with secondary compressors (in size, not speed).
 
 ## Improvements
-After making a window selection algorithm, it would then probably make sense to try to make a stream interface. There isn't really a point as the current encoder needs everything in memory. I think it would make the API clunky, adding a layer of indirection at the moment.
+
+The main encoders for both src and trgt use a similar design, so improvements to one will improve both. I tried to keep them efficient. They are broadly modelled on how xdelta3 approaches finding matches. However, I must not have something quite right as I don't find the same good matches that xdelta3 does. The match algorithm however sort of feeds on itself: better matches lead to better matches due to the nature of how the encoder advances and assess each position in the output stream. So finding somewhat better matches will up the likelihood of finding better matches. The speed of the encoding process also gets faster with finding better matches (we assess less positions). Thus getting a good matches is doubly important. Apparently my current design has some issues with the hashing and table storage. The alternative is that my main loop grabs a decent copy to soon, and skips over a better copy that apparently xd3 assess. This would have to do with the lazy matching part of the loop. However, that seems pretty straightforward and looks to match xd3 approach closely. My hashing definitely differs more from how xd3 works due to C -> Rust (and I made a nicer interface to deal with all the state). So the problem is probably there somewhere.
+
+
+## API
+It would probably make sense to try to make a stream interface. There isn't really a point as the current encoder needs everything in memory. I think it would make the API clunky, adding a layer of indirection at the moment. The code would need to integrate reading the input in chunks and processing as it goes. I have already made the API take Readers/Writers in preparation for this. Ideally we would instantiate a writer wrapper that wraps a Src file (optional) as well as the patch output Writer. Then we feed in the trgt file. Not sure exactly the best ergonomics, hence just leaving things as is.

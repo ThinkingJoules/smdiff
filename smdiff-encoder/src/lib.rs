@@ -155,6 +155,22 @@ impl EncoderConfig {
         self.lazy_escape_len = Some(len);
         self
     }
+    pub fn comp_level(level: usize,match_trgt:bool,sec_comp:Option<SecondaryCompression>) -> Self {
+        let match_trgt = if match_trgt {
+            Some(TrgtMatcherConfig::comp_level(level))
+        }else{
+            None
+        };
+        Self {
+            match_src: Some(SrcMatcherConfig::comp_level(level)),
+            output_segment_size: MAX_WIN_SIZE,
+            format: Format::Interleaved,
+            match_trgt,
+            sec_comp,
+            naive_tests: None,
+            lazy_escape_len: None,
+        }
+    }
 }
 impl Default for EncoderConfig {
     fn default() -> Self {
@@ -186,6 +202,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: &mut R, o
         naive_tests,
     };
     let segments = encoder::encode_inner(&mut inner_config, src, trgt);
+    dbg!(&inner_config);
     let ops = translate_inner_ops(&inner_config, trgt, segments);
     let mut cur_o_pos: usize = 0;
     let mut i = 0;

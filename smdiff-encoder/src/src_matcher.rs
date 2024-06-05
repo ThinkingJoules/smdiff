@@ -181,7 +181,8 @@ impl SrcMatcherConfig {
             .max_src_win_size
             .map(|s| s.next_power_of_two().max(MIN_SRC_WIN_SIZE))
             .unwrap_or(
-                calculate_default_win_size(src_len, trgt_len,None)
+                DEFAULT_SRC_WIN_SIZE
+                //calculate_default_win_size(src_len, trgt_len,None)
             ));
 
         self.hash_win_len = Some(self
@@ -282,6 +283,8 @@ pub fn src_hash_len(len:usize)->usize{
     }
 }
 
+//Thought I could cut down encoding time, but this misses lots of good matches on disimilar files of similar length
+#[allow(dead_code)]
 fn calculate_default_win_size(src_len: usize, trgt_len: usize,max_win_size:Option<usize>) -> usize {
     let mut win_size = (src_len).abs_diff(trgt_len).next_power_of_two();
     if win_size <= MIN_SRC_WIN_SIZE {
@@ -383,7 +386,7 @@ mod test_super {
             (50, 128, Some((436, 64))),  // Start partway through trgt on init
             (60, 436+128, Some((564, 50))), // Overlapping windows
             (190, 150, Some((1836, 64))),  // Near the end of trgt
-            (200, 190, None),     // Exceeds trgt_len
+            (200, 190, Some((1868, 64))),     // Max valid trgt end
             (50, 1900, None),    // Window out of bounds in src
         ];
 
