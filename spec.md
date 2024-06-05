@@ -67,8 +67,7 @@ Below are example source and target *files* and the delta operation that encode 
         ADD     4, w x y z
         COPY_D  4, 4
         COPY_O  4, 8
-        COPY_O  4, 8
-        COPY_O  4, 8
+        COPY_O  8, 8
         RUN     4, z
 ```
 COPY_D is used to indicate a copy from the source or dictionary file. The first operation copies "abcd" from the dictionary and places it in the output. COPY_O is used to copy from earlier within the output. Unfortunately the original RFC3284 does not illustrate this well as we could have used COPY_D(4,4) and repeated that operation. However, this example does illustrate our lack of periodic sequence encoding in SMDIFF.
@@ -111,7 +110,7 @@ The first byte in the header is a byte with info about the format of the section
 ```
      7 6 5 4 3 2 1 0
     +-+-+-+-+-+-+-+-+
-    | | |     |!used|
+    | | |     |vers?|
     +-+-+-+-+-+-+-+-+
      ^ ^   ^- Compression Algo (u3)
      | +------ Format (bool)
@@ -120,7 +119,7 @@ The first byte in the header is a byte with info about the format of the section
 
 | Bit(s) | Field               | Description        |
 | ----- | ------------------- | -------------------- |
-| 0-2   | Unused    |  N/A |
+| 0-2   | Spec Version        |  unspecified for now, value of 0 until spec changes.|
 | 3-5   | Compression Algo    | 0 = None, 1 = Smdiff Compress, 2 = zstd, 3 = brotli, 4-7 = unspecified
 | 6     | Format              | 0 = Interleaved, 1 = Segregated Adds  |
 | 7     | Continuation Bit    | 0 = Terminal Section, 1 = More Sections Follow |
@@ -208,16 +207,12 @@ While this may make the resulting delta file larger, it greatly simplifies the s
 We simply use an i-varint to denote the *difference* from the last copy address used from that source. Each new section we set `last_dict_addr` and `last_out_addr` to zero. Then each time we read a Copy from either the dict or the out, we simply use the signed integer value and add it to the appropriate `last_addr`. This is the absolute offset from the start of which ever file we need to start copying from. This absolute value is then set to the appropriate `last_addr` variable for reading on the next Copy operation encountered.
 
 ## 6. Performance
-My spec encoder is a (nearly) 'perfect' encoder. That is, the smdiff encoder considers everything all the time. For windowed format our minimum match might leave some matches missed (hence the 'nearly' perfect). Using micro format (not applicable to the below test), we consider the shortest profitable match possible, always.
-
 Using the table from the original RFC. I have added something similar using the exact same data.
 Using the knowledge that the encoder methods differ, we cannot really compare the outputs directly to know if our format has excessive overhead (more on that below).
 
 What the table below does illustrate, is that window selection is very important if you want to build a more memory efficient encoder. This is evident when comparing Vcdiff-dcw against Smdiff-dcw.
 
-Since computers have advanced greatly and RAM is cheap and still getting cheaper, I elected to build the encoder for modern computers, and not really large file sizes. This allows for better matches and a simpler encoder (no window selection logic) at the cost of not being able to do massive files.
-
-The beauty of the VCDIFF/SMDIFF formats is that the encoder and decoder are independent from each other. So if someone wanted to do massive files they would need to write just an encoder with some sort of window selection to limit memory consumption. This is also easier to do since SMDIFF is so much simpler to comply with the spec.
+The beauty of the VCDIFF/SMDIFF formats is that the encoder and decoder are independent from each other. So if someone wanted to write an better encoder, they don't need to worry about writing a decoder. This is also easier to do since SMDIFF is so much simpler to comply with the spec.
 
 ### 6.1 Example Delta File Sizes
 Below is the explanation from the original RFC:
@@ -260,13 +255,13 @@ Original Table with Smdiff comparisons
 6. Vcdiff-dc        -               97,246     14,461,203
 7. Vcdiff-dcw       -              256,445      1,248,543
 8. Smdiff           -           15,827,696     15,815,007
-9. Smdiff-d         -               96,647        451,809
+9. Smdiff-d         -               84,018        420,279
 10.Smdiff-dc        -                  N/A            N/A
-11.Smdiff-dcw       -               86,304        251,370
+11.Smdiff-dcw       -               76,860        276,061
 ```
-It is probably really only fair to compare the 'compress only' (Vcdiff & Smdiff). As noted, my test encoder is a (nearly) 'perfect' encoder.
+It is probably really only fair to compare the 'compress only' (Vcdiff & Smdiff).
 
-If we want to compare the *format* we need a different approach. Since I do not have the original source code for VCDIFF enocoder, or the exact delta files used in the tables, I cannot do an exact comparison to the data in the table. From testing against other extant encoders, I converted the .vcdiff delta file directly in to .smdiff format. The resulting files were actually a little less than 1% *smaller*. They did not have any periodic sequences in the original .vcdiff format. The Smdiff output is ~3% larger than the table values for Vcdiff, so I would assume that they must had a few periodic sequences in their data.
+If we want to compare the *format* we need a different approach. Since I do not have the original source code for VCDIFF encoder, or the exact delta files used in the tables, I cannot do an exact comparison to the data in the table. From testing against other extant encoders, I converted the .vcdiff delta file directly in to .smdiff format. The resulting files were actually a little less than 1% *smaller*. They did not have any periodic sequences in the original .vcdiff format. The Smdiff output is ~3% larger than the table values for Vcdiff, so I would assume that they must had a few periodic sequences in their data.
 
 ## 7. Conclusion
 My conclusion is that this new format is probably about a wash unless your data (and encoder) can leverage the periodic sequence that does not exist in SMDIFF. The spec is massively simplified, and having fixed and known secondary compressors defined in the spec will aide in interoperability.

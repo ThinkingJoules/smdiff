@@ -10,7 +10,7 @@ Mostly: I went without super string U for windows.
 All windows are effectively `source_segment_position: 0` and `source_segment_size: size of file`. This change allows us to mix Copy operations from both the Dictionary (initial file) and the Output (target file) in a single 'window' (called sections in SMDIFF).
 
 ## Windows
-Windows are now just output buffer boundaries (called sections). They really don't serve any purpose except to limit output size for any single group of instructions.
+Windows are now just output buffer boundaries (called sections). They really don't serve any purpose except to limit output size for any single group of instructions. Secondary Compression occurs inside of each section.
 
 ## Formats
 I baked in the 'interleaved' vs 'segregated' flags that Google's open-vcdiff C++ impl added. Segregated usually helps secondary compressors achieve better compression of the unmatched Add bytes, but if you don't have very many, then it is better to just interleave them.
@@ -22,10 +22,11 @@ I did away with the implicit sequence operation. I don't think either extant VCD
 Things have max sizes that are part of the spec. This makes it easier to reason about worst case encoding choices when trying to write a decoder.
 
 # Spec
-For the full spec see [spec.md]
+For the full spec see [./spec.md]
 
 # Performance
-The reference encoder is a memory hog. To keep it simpler to build I skipped window selection and put it all into RAM. This means the reference encoder can do a file as large as you have RAM for (there is a lot of overhead, so not too big of file). On large files (120mb) the reference encoder beats either xdelta3 or open-vcdiff, but I must have something a miss since mine is slower for files around 50mb in size. Needs some work, but those other two encoders had a lot more time and energy put in to them. xdelta3 is really fast and gets good matches. However, I can't seem to decode those files using open-vcdiff. There seems to be a problem with how xdelta3 calculates copy addresses. It doesn't seem to agree with the spec. Neither my vcdiff decoder works, nor is open-vcdiff able to apply an xdelta3 generated patch.
-
+The reference encoder is decent. It isn't as good as xdelta3, but it is way easier to read, and is in 100% safe Rust.
 
 If this works for you, then great. If not, you need to write an encoder or use a VCDIFF encoder (not xdelta3 though) and translate it to SMDIFF (see the smdiff-vcdiff translator crate).
+
+Note: I can't seem to read xdelta3 per the spec, so either I'm missing something or there is a bug. It would be really nice to be able to translate xd3 patches for when you need a wicked fast encoder. I suspect the issue is either in how I am decoding the address cache modes, or how xd3 is encoding them. I can decode open-vcdiff patch files, so I suspect xd3 is encoding the address value incorrectly. The other explanation is that open-vcdiff doesn't use all the modes, and I have an error in how I'm reading the modes that xd3 uses. I haven't dived deep in to the open-vcdiff src like I have xd3, but I still suspect xd3 has an error.
