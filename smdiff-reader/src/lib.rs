@@ -1,11 +1,21 @@
+//!
+//!This library is used to read the underlying smdiff format. It does not handle secondary decompression.
+//!
+//!If you need a reader for secondary decompression, you can use the smdiff-decoder::reader module. It wraps this lib.
+//!
+//!The main struct is the `SectionReader`. It reads a section at a time, and returns the ops and the header.
+//!
+//!The building blocks of that reader are exposed for other users to build their own readers.
+//!
 use std::io::Read;
 
-use smdiff_common::{diff_addresses_to_u64, read_i_varint, read_u16, read_u8, read_u_varint, size_routine, AddOp, Copy, CopySrc, Format, Run, Size, SectionHeader, ADD, COPY_D, COPY_O, OP_MASK, RUN, SIZE_MASK};
+use smdiff_common::{diff_addresses_to_u64, read_i_varint, read_u16, read_u8, read_u_varint, size_routine, AddOp, Copy, CopySrc, Format, Run, SectionHeader, Size, ADD, COPY_D, COPY_O, OP_MASK, RUN, SECTION_COMPRESSION_MASK, SECTION_COMPRESSION_RSHIFT, SECTION_CONTINUE_BIT, SECTION_FORMAT_BIT, SIZE_MASK};
 
 
-
+/// Op Type alias for the Readers Add type
 pub type Op = smdiff_common::Op<Add>;
 
+/// Add Op for the Reader
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Add{
     pub bytes: Vec<u8>,
@@ -21,12 +31,12 @@ impl AddOp for Add{
         &self.bytes
     }
 }
-
+/// Reads a section header from the reader at the current position.
 pub fn read_section_header<R: std::io::Read>(reader: &mut R) -> std::io::Result<SectionHeader> {
     let header_byte = read_u8(reader)?;
-    let compression_algo = (header_byte & 0b00111000) >> 3;
-    let format = if header_byte & 0b01000000 == 0b01000000{Format::Segregated} else {Format::Interleaved};
-    let more_sections = (header_byte & 0b1000_0000) == 0b1000_0000;
+    let compression_algo = (header_byte & SECTION_COMPRESSION_MASK) >> SECTION_COMPRESSION_RSHIFT;
+    let format = if header_byte & SECTION_FORMAT_BIT == SECTION_FORMAT_BIT{Format::Segregated} else {Format::Interleaved};
+    let more_sections = (header_byte & SECTION_CONTINUE_BIT) == SECTION_CONTINUE_BIT;
     let num_operations = read_u_varint(reader)? as u32;
     let num_add_bytes = if format.is_segregated() {
         read_u_varint(reader)? as u32
@@ -50,8 +60,12 @@ pub fn read_section_header<R: std::io::Read>(reader: &mut R) -> std::io::Result<
     })
 }
 
-
-pub fn read_ops_no_comp<R: std::io::Read>(reader: &mut R, header:&SectionHeader,op_buffer:&mut Vec<Op>)-> std::io::Result<()>{
+/// Reads the operations from the reader at the current position. Cannot have secondary compression still applied.
+///
+/// The mutable reference to the section header is so that the
+/// function can update the number of add bytes in the event the format is interleaved.
+/// This way the header reflects reality regardless of if it was originally encoded in the header.
+pub fn read_ops_no_comp<R: std::io::Read>(reader: &mut R, header:&mut SectionHeader,op_buffer:&mut Vec<Op>)-> std::io::Result<()>{
     let SectionHeader { format, num_operations, output_size, .. } = header;
     //dbg!(&header);
     let mut cur_d_addr = 0;
@@ -65,8 +79,10 @@ pub fn read_ops_no_comp<R: std::io::Read>(reader: &mut R, header:&SectionHeader,
             //dbg!(num_operations,output_size,num_add_bytes);
             for i in 0..*num_operations {
                 let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr,false)?;
-                check_size += op.oal() as u32;
+                let len = op.oal() as u32;
+                check_size += len;
                 if op.is_add(){
+                    header.num_add_bytes += len;
                     add_idxs.push(buffer_offset+i as usize);
                 }
                 op_buffer.push(op);
@@ -99,10 +115,13 @@ pub fn read_ops_no_comp<R: std::io::Read>(reader: &mut R, header:&SectionHeader,
     }
 }
 
-///Returns the ops and the output size. Cannot be compressed
-pub fn read_section<R: std::io::Read>(reader: &mut R,op_buffer:&mut Vec<Op>) -> std::io::Result<SectionHeader> {
-    let header = read_section_header(reader)?;
-    read_ops_no_comp(reader, &header,op_buffer)?;
+///Returns the ops and the output size. Cannot have secondary compression still applied.
+///
+/// This is just a wrapper that completely reads a section from the reader.
+pub fn read_section<R: std::io::Read>(reader: &mut R, op_buffer:&mut Vec<Op>) -> std::io::Result<SectionHeader> {
+    let mut header = read_section_header(reader)?;
+    op_buffer.reserve(header.num_operations as usize);
+    read_ops_no_comp(reader, &mut header, op_buffer)?;
     Ok(header)
 }
 
@@ -131,7 +150,15 @@ fn read_op_byte<R: std::io::Read>(reader: &mut R) -> std::io::Result<OpByte> {
         _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid op type")),
     }
 }
-fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut u64,is_micro_fmt:bool) -> std::io::Result<Op> {
+/// Reads an operation from the reader at the given position.
+/// * `reader` - The reader to read from.
+/// * `cur_d_addr` - The last used copy dictionary address.
+/// * `cur_o_addr` - The last used copy output address.
+/// * `is_interleaved` - If the format is interleaved.
+///
+/// If this is segregated format, the Add ops will just be initialized to all zeros in the bytes field.
+/// The caller will need to fill in the bytes later.
+pub fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut u64,is_interleaved:bool) -> std::io::Result<Op> {
     let OpByte { op, size } = read_op_byte(reader)?;
     if matches!(op, OpType::Run) && !matches!(size, Size::Done(_)) {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid size for RUN operation"));
@@ -156,7 +183,7 @@ fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut 
         },
         OpType::Add => {
             let mut bytes = vec![0u8;size as usize];
-            if is_micro_fmt{
+            if is_interleaved{
                 reader.read_exact(&mut bytes)?;
             }
             Op::Add(Add{bytes})
@@ -168,12 +195,13 @@ fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut 
     Ok(op)
 }
 
-pub struct SectionReader<R>{
+/// A reader that will keep reading sections until it reaches the terminal section.
+pub struct SectionIterator<R>{
     source: R,
     done:bool,
     op_buffer: Vec<Op>,
 }
-impl<R: Read> SectionReader<R>{
+impl<R: Read> SectionIterator<R>{
     pub fn new(source: R) -> Self {
         Self {
             source,
@@ -181,7 +209,10 @@ impl<R: Read> SectionReader<R>{
             op_buffer: Vec::new(),
         }
     }
-    pub fn next(&mut self) -> Option<std::io::Result<(&[Op],SectionHeader)>> {
+    ///Reads and returns the next section (if it exists).
+    ///
+    /// This is useful if you don't need the Ops, just need to read them.
+    pub fn next_borrowed(&mut self) -> Option<std::io::Result<(&[Op],SectionHeader)>> {
         if self.done{
             return None;
         }
@@ -196,11 +227,33 @@ impl<R: Read> SectionReader<R>{
         }
         Some(Ok((self.op_buffer.as_slice(),header)))
     }
+    ///In the event the caller needs to do something to the ops (more than just read them), this avoids the need to clone the slice.
+    fn next_owned(&mut self) -> Option<std::io::Result<(Vec<Op>,SectionHeader)>> {
+        if self.done{
+            return None;
+        }
+        let mut op_buffer = Vec::new();
+        let header = match read_section(&mut self.source,&mut op_buffer){
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+
+        };
+        if !header.more_sections{
+            self.done = true;
+        }
+        Some(Ok((op_buffer,header)))
+    }
     pub fn into_inner(self) -> R {
         self.source
     }
 }
+impl<R: Read> Iterator for SectionIterator<R> {
+    type Item = std::io::Result<(Vec<Op>, SectionHeader)>;
 
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_owned()
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -228,8 +281,8 @@ mod tests {
             129, //ADD, Size 1 0b10_000001
             111 //'o'
         ];
-        let mut reader = SectionReader::new(Cursor::new(answer));
-        while let Some(Ok((read_ops,_))) = reader.next(){
+        let mut reader = SectionIterator::new(Cursor::new(answer));
+        while let Some(Ok((read_ops,_))) = reader.next_borrowed(){
             for (op,answer) in read_ops.iter().zip(ops.clone()) {
                 assert_eq!(op, &answer);
             }
@@ -260,8 +313,8 @@ mod tests {
             70, //COPY_O, Size 6 0b01_000110
             0, //addr ivar int 0
         ];
-        let mut reader = SectionReader::new(Cursor::new(answer));
-        while let Some(Ok((read_ops,_))) = reader.next(){
+        let mut reader = SectionIterator::new(Cursor::new(answer));
+        while let Some(Ok((read_ops,_))) = reader.next_borrowed(){
             for (op,answer) in read_ops.iter().zip(ops.clone()) {
                 assert_eq!(op, &answer);
             }
@@ -319,9 +372,9 @@ mod tests {
             70, //COPY_O, Size 6 0b01_000110
             0, //addr ivar int 0
         ];
-        let mut reader = SectionReader::new(Cursor::new(answer));
+        let mut reader = SectionIterator::new(Cursor::new(answer));
         let mut ops_iter = ops.iter();
-        while let Some(Ok((read_ops,_))) = reader.next(){
+        while let Some(Ok((read_ops,_))) = reader.next_borrowed(){
             let ans_ops = ops_iter.next().unwrap();
             for (op,answer) in read_ops.iter().zip(ans_ops.clone()) {
                 assert_eq!(op, &answer);
@@ -406,9 +459,9 @@ mod tests {
             46, //'.'
         ];
 
-        let mut reader = SectionReader::new(Cursor::new(answer));
+        let mut reader = SectionIterator::new(Cursor::new(answer));
         let mut ops_iter = ops.iter();
-        while let Some(Ok((read_ops,_))) = reader.next(){
+        while let Some(Ok((read_ops,_))) = reader.next_borrowed(){
             let ans_ops = ops_iter.next().unwrap();
             for (op,answer) in read_ops.iter().zip(ans_ops.clone()) {
                 assert_eq!(op, &answer);
