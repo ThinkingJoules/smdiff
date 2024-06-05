@@ -18,6 +18,17 @@ pub const MAX_INST_SIZE:usize = u16::MAX as usize;
 /// Inclusive Upper Bound
 pub const MAX_WIN_SIZE:usize = (1<<24) - 1; // 16MB
 
+/// Section Header Continue Bit
+pub const SECTION_CONTINUE_BIT: u8 = 0b10000000;
+/// Section Header Format Bit
+pub const SECTION_FORMAT_BIT: u8 = 0b01000000;
+/// Section Header Compression Mask
+pub const SECTION_COMPRESSION_MASK: u8 = 0b00111000;
+/// Section Header Compression Right Shift amount
+pub const SECTION_COMPRESSION_RSHIFT: u8 = 3;
+/// Section Header Version Mask
+pub const VERSION_MASK: u8 = 0b00000111;
+
 /// Format of the how a section is laid out.
 /// * Interleaved: The Add bytes follow each Add Opertion
 /// * Segregated: All Add bytes are at the end of the section
