@@ -89,20 +89,20 @@ pub fn analyze_sec_comp_large_file_worst()-> Result<(), Box<dyn std::error::Erro
 
     let config = EncoderConfig::default().format_segregated().set_match_src(SrcMatcherConfig::comp_level(0)).set_match_target(TrgtMatcherConfig::comp_level(0));
     let r_none = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) (no sec)",(r_none[0].0, r_none[0].1, r_none[0].2)));
+    values.push(("Smdiff-d (no sec)",(r_none[0].0, r_none[0].1, r_none[0].2)));
     let config = config.clone().set_sec_comp(SecondaryCompression::Smdiff(TrgtMatcherConfig::comp_level(0)));
     let r_sm = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) + smdiff",(r_sm[0].0, r_sm[0].1, r_sm[0].2)));
+    values.push(("Smdiff-d + Smdiff",(r_sm[0].0, r_sm[0].1, r_sm[0].2)));
     let config = config.clone().set_sec_comp(SecondaryCompression::Zstd { level: 1 });
     let r_z = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) + zstd",(r_z[0].0, r_z[0].1, r_z[0].2)));
+    values.push(("Smdiff-d + zstd",(r_z[0].0, r_z[0].1, r_z[0].2)));
     let config = config.clone().set_sec_comp(SecondaryCompression::Brotli { options  });
     let r_b = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) + brotli",(r_b[0].0, r_b[0].1, r_b[0].2)));
-    values.push(("smdiff(src+trgt) (no sec)",(r_none[1].0, r_none[1].1, r_none[1].2)));
-    values.push(("smdiff(src+trgt) + smdiff",(r_sm[1].0, r_sm[1].1, r_sm[1].2)));
-    values.push(("smdiff(src+trgt) + zstd",(r_z[1].0, r_z[1].1, r_z[1].2)));
-    values.push(("smdiff(src+trgt) + brotli",(r_b[1].0, r_b[1].1, r_b[1].2)));
+    values.push(("Smdiff-d + brotli",(r_b[0].0, r_b[0].1, r_b[0].2)));
+    values.push(("Smdiff-dcw (no sec)",(r_none[1].0, r_none[1].1, r_none[1].2)));
+    values.push(("Smdiff-dcw + smdiff",(r_sm[1].0, r_sm[1].1, r_sm[1].2)));
+    values.push(("Smdiff-dcw + zstd",(r_z[1].0, r_z[1].1, r_z[1].2)));
+    values.push(("Smdiff-dcw + brotli",(r_b[1].0, r_b[1].1, r_b[1].2)));
     println!("Raw Target File Size: {}", raw_size);
     print_table_s(values, raw_size);
     Ok(())
@@ -166,20 +166,20 @@ pub fn analyze_sec_comp_large_file_best()-> Result<(), Box<dyn std::error::Error
 
     let config = EncoderConfig::default().format_segregated().set_match_src(SrcMatcherConfig::comp_level(9)).set_match_target(TrgtMatcherConfig::comp_level(9));
     let r_none = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) (no sec)",(r_none[0].0, r_none[0].1, r_none[0].2)));
+    values.push(("Smdiff-d (no sec)",(r_none[0].0, r_none[0].1, r_none[0].2)));
     let config = config.clone().set_sec_comp(SecondaryCompression::Smdiff(TrgtMatcherConfig::comp_level(9)));
     let r_sm = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) + smdiff",(r_sm[0].0, r_sm[0].1, r_sm[0].2)));
+    values.push(("Smdiff-d + smdiff",(r_sm[0].0, r_sm[0].1, r_sm[0].2)));
     let config = config.clone().set_sec_comp(SecondaryCompression::Zstd { level: 22 });
     let r_z = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) + zstd",(r_z[0].0, r_z[0].1, r_z[0].2)));
+    values.push(("Smdiff-d + zstd",(r_z[0].0, r_z[0].1, r_z[0].2)));
     let config = config.clone().set_sec_comp(SecondaryCompression::Brotli { options  });
     let r_b = sec_comp_gcc_2951_2952(&config)?;
-    values.push(("smdiff(src) + brotli",(r_b[0].0, r_b[0].1, r_b[0].2)));
-    values.push(("smdiff(src+trgt) (no sec)",(r_none[1].0, r_none[1].1, r_none[1].2)));
-    values.push(("smdiff(src+trgt) + smdiff",(r_sm[1].0, r_sm[1].1, r_sm[1].2)));
-    values.push(("smdiff(src+trgt) + zstd",(r_z[1].0, r_z[1].1, r_z[1].2)));
-    values.push(("smdiff(src+trgt) + brotli",(r_b[1].0, r_b[1].1, r_b[1].2)));
+    values.push(("Smdiff-d + brotli",(r_b[0].0, r_b[0].1, r_b[0].2)));
+    values.push(("Smdiff-dcw (no sec)",(r_none[1].0, r_none[1].1, r_none[1].2)));
+    values.push(("Smdiff-dcw + smdiff",(r_sm[1].0, r_sm[1].1, r_sm[1].2)));
+    values.push(("Smdiff-dcw + zstd",(r_z[1].0, r_z[1].1, r_z[1].2)));
+    values.push(("Smdiff-dcw + brotli",(r_b[1].0, r_b[1].1, r_b[1].2)));
     println!("Raw Target File Size: {}", raw_size);
     print_table_s(values, raw_size);
     Ok(())

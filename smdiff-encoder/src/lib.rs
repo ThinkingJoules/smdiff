@@ -1,5 +1,5 @@
 
-use std::io::Write;
+use std::{io::Write, ops::{Range, RangeInclusive}};
 
 use encoder::{GenericEncoderConfig, LargerTrgtNaiveTests};
 use op_maker::translate_inner_ops;
@@ -185,9 +185,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: &mut R, o
         lazy_escape_len,
         naive_tests,
     };
-    dbg!(&inner_config);
     let segments = encoder::encode_inner(&mut inner_config, src, trgt);
-    dbg!(&inner_config,segments.len());
     let ops = translate_inner_ops(&inner_config, trgt, segments);
     let mut cur_o_pos: usize = 0;
     let mut i = 0;
@@ -369,12 +367,46 @@ fn _addr_cost(cur_addr: u64, next_addr: u64) -> isize {
 //     -((size > 62) as isize) - (size > 317) as isize
 // }
 
+struct Ranger {
+    input_range: Range<usize>,
+    output_range: RangeInclusive<usize>,
+    input_span: usize,
+    output_span: usize,
+    is_inverted: bool,
+}
+
+impl Ranger {
+    fn new(input_range: Range<usize>, output_range: RangeInclusive<usize>) -> Self {
+        let input_span = input_range.end - input_range.start - 1;
+        let is_inverted = output_range.start() > output_range.end();
+        let output_span = output_range.end().abs_diff(*output_range.start());
+
+        Self { input_range, output_range, input_span, output_span, is_inverted }
+    }
+
+    fn map(&self, input_value: usize) -> usize {
+        let input_value = input_value.clamp(self.input_range.start, self.input_range.end-1);
+        let b = self.output_range.start().min(self.output_range.end());
+        let m = input_value - self.input_range.start;
+        //let m = if self.is_inverted {self.input_range.end - input_value}else{input_value-self.input_range.start};
+        let output = b + ((self.output_span * m) / self.input_span);
+        if self.is_inverted{
+            self.output_span+self.output_range.end() - output + self.output_range.end()
+        }else{
+            output
+        }
+        //Some(output.clamp(*b, b+self.output_span))
+    }
+}
+
+
+
 #[cfg(test)]
 mod test_super {
     use super::*;
 
     #[test]
-    fn test_calculate_chain_len() {
+    fn test_calculate_prev_list_size() {
         let test_cases = [
             (3, 1 << 26, 2, 4),
             (5, 1 << 26, 2, 4),
@@ -401,4 +433,53 @@ mod test_super {
             //            hash_win_len, win_size, l_step);
         }
     }
+
+    #[test]
+    fn test_regular_mapping() {
+        let input_range = 1..11;
+        let output_range = 1..=100;
+        let interpolator = Ranger::new(input_range, output_range);
+
+        assert_eq!(interpolator.map(1), 1);
+        assert_eq!(interpolator.map(2), 12);
+        assert_eq!(interpolator.map(3), 23);
+        assert_eq!(interpolator.map(4), 34);
+        assert_eq!(interpolator.map(5), 45);
+        assert_eq!(interpolator.map(6), 56);
+        assert_eq!(interpolator.map(7), 67);
+        assert_eq!(interpolator.map(8), 78);
+        assert_eq!(interpolator.map(9), 89);
+        assert_eq!(interpolator.map(10), 100);
+    }
+    #[test]
+    fn test_regular_mapping2() {
+        let input_range = 0..10;
+        let output_range = 26..=2;
+        let interpolator = Ranger::new(input_range, output_range);
+
+        assert_eq!(interpolator.map(9), 2);
+
+    }
+
+    #[test]
+    fn test_inverted_mapping() {
+        let input_range = 1..11;
+        let output_range = 100..=1; // Inverted range
+        let interpolator = Ranger::new(input_range, output_range);
+
+        assert_eq!(interpolator.map(1), 100);
+        assert_eq!(interpolator.map(5), 56);
+        assert_eq!(interpolator.map(10), 1);
+    }
+
+    #[test]
+    fn test_out_of_range_input() {
+        let input_range = 3..10;
+        let output_range = 0..=100;
+        let interpolator = Ranger::new(input_range, output_range);
+
+        assert_eq!(interpolator.map(0), interpolator.map(3)); // Below range
+        assert_eq!(interpolator.map(11), interpolator.map(10)); // Above range
+    }
+
 }

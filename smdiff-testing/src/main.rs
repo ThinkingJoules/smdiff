@@ -7,7 +7,7 @@ mod merge_test;
 mod sec_comp;
 use sec_comp::{analyze_sec_comp_large_file_best, analyze_sec_comp_sentence_best};
 use smdiff_common::Format;
-use smdiff_encoder::{brotli::{BlockSize, BrotliEncoderOptions, CompressionMode, Quality, WindowSize}, EncoderConfig, SecondaryCompression};
+use smdiff_encoder::{brotli::{BlockSize, BrotliEncoderOptions, CompressionMode, Quality, WindowSize}, EncoderConfig, SecondaryCompression, TrgtMatcherConfig};
 // use params::*;
 use vc_to_sm::*;
 use size_tests::*;
@@ -32,7 +32,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     // TESTS
     // merge_2951_2952_2953()?;
 
-    // let config = EncoderConfig::new(true, 16, None, Format::Interleaved);
+    // let config = EncoderConfig::default().set_match_target(TrgtMatcherConfig::default());
     // println!("{:?}", config);
     // encode_test_gcc_2951_2952(&config)?;
     // encode_test_gcc_2952_2953(&config)?;
@@ -48,9 +48,9 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     // vc_analysis()?;
     // analyze_sec_comp_large_file_worst()?;
     // analyze_sec_comp_large_file_best()?;
-    // analyze_sec_comp_sentence_best()?;
+    analyze_sec_comp_sentence_best()?;
 
-    new_encode_test_gcc_2951_2952()?;
+    //new_encode_test_gcc_2951_2952()?;
     Ok(())
 }
 

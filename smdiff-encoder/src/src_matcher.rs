@@ -1,5 +1,5 @@
 
-use crate::{hasher::{HasherCusor, LargeHashCursor}, hashmap::{BasicHashTable, HashTable}, max_unique_substrings_gt_hash_len};
+use crate::{hasher::{HasherCusor, LargeHashCursor}, hashmap::{BasicHashTable, ChainList}, max_unique_substrings_gt_hash_len, Ranger};
 
 struct InnerConfig{
     l_step:usize,
@@ -22,6 +22,7 @@ pub(crate) struct SrcMatcher<'a>{
     chain_check: usize,
     hasher: LargeHashCursor<'a>,
     table: BasicHashTable,
+    chain: ChainList
 }
 
 impl<'a> SrcMatcher<'a> {
@@ -66,8 +67,8 @@ impl<'a> SrcMatcher<'a> {
     }
     ///Returns (src_pos, pre_match, post_match) post_match *includes* the hash_win_len.
     pub fn find_best_src_match(&self,src:&[u8],trgt:&[u8],cur_o_pos:usize,hash:usize)->Option<(usize,usize,usize)>{
-        let table_pos = self.table.get_last_pos(self.table.calc_index(hash))?;
-        let mut iter = std::iter::once(table_pos).chain(self.table.iter_prev_starts(table_pos, self.hasher.peek_next_pos()));
+        let table_pos = self.table.get(hash)?;
+        let mut iter = std::iter::once(table_pos).chain(self.chain.iter_prev_starts(table_pos, self.hasher.peek_next_pos(),hash));
         let mut chain = self.chain_check;
         let mut best = None;
         let mut best_len = 0;
@@ -117,9 +118,16 @@ impl<'a> SrcMatcher<'a> {
     }
     fn store(&mut self, hash:usize, abs_pos:usize){
         debug_assert!(abs_pos % self.l_step == 0);
-        let idx = self.table.calc_index(hash);
         let table_pos = self.abs_to_table_pos(abs_pos);
-        self.table.insert(idx, table_pos);
+        match self.table.insert(hash, table_pos){
+            Ok(None) => {},
+            Ok(Some(prev)) => {
+                self.chain.insert(hash, table_pos, prev);
+            },
+            Err((old_hash,prev_pos)) => {
+                self.chain.insert(old_hash, table_pos, prev_pos);
+            }
+        }
     }
 }
 
@@ -157,9 +165,8 @@ impl SrcMatcherConfig {
     /// The higher the level the more accurate the matches but slower.
     pub fn comp_level(level:usize)->Self{
         assert!(level <= 9);
-        let l_step = 2 + ((24 * (9-level)) / 9); // 26..=2;
-        let chain_check = 1 + level;
-        //dbg!(level,l_step,chain_check);
+        let l_step = Ranger::new(0..10, 26..=2).map(level);
+        let chain_check = level/3 + 1;
         Self { l_step, chain_check, prev_table_capacity: None, max_src_win_size: None, hash_win_len: None}
     }
     pub fn with_table_capacity(mut self, table_capacity:usize)->Self{
@@ -180,7 +187,7 @@ impl SrcMatcherConfig {
         self.hash_win_len = Some(self
             .hash_win_len
             .map(|l| l.clamp(3, 9))
-            .unwrap_or_else(|| src_hash_len(self.max_src_win_size.unwrap()).min(src_hash_len(trgt_len))));
+            .unwrap_or_else(|| calculate_default_hash_len(src_len,trgt_len,self.max_src_win_size.unwrap())));
 
         // Calculate prev_table_capacity dynamically
         self.prev_table_capacity = if self.chain_check == 1 {
@@ -205,40 +212,17 @@ impl SrcMatcherConfig {
         }
     }
     pub(crate) fn build<'a>(&mut self,src:&'a [u8],trgt_start_pos:usize,trgt_len:usize)->SrcMatcher<'a>{
-        let Self { l_step, chain_check, prev_table_capacity, max_src_win_size, hash_win_len } = self;
-        assert!(*l_step % 2 == 0, "l_step({}) must be and even number",l_step);
-        let src_len = src.len();
-        max_src_win_size.get_or_insert(DEFAULT_SRC_WIN_SIZE);
-        *max_src_win_size = Some(max_src_win_size.unwrap().min(src.len()).next_power_of_two());
-        let src_win = max_src_win_size.unwrap();
-        let prev_capacity = if *chain_check == 1 {0}else{prev_table_capacity.unwrap_or((max_src_win_size.unwrap() / *l_step).next_power_of_two() >> 1)};
-        *prev_table_capacity = Some(prev_capacity);
-        let hwl = hash_win_len.get_or_insert(src_hash_len(src_win));
-        let hasher = LargeHashCursor::new(src, *hwl);
-        let table = BasicHashTable::new(src_win/ *l_step, prev_capacity, *hwl<=4);
-        let max_end_pos =  align(src_len-*hwl,*l_step);
-        let mut matcher = SrcMatcher{
-            hasher, table, src_len, trgt_len, max_end_pos,
-            l_step:*l_step,
-            hash_win_len:*hwl,
-            chain_check:*chain_check,
-            half_win_size: src_win>>1,
-        };
-        //prefill with hash start positions.
-        matcher.center_on(trgt_start_pos);
-        matcher
-    }
-    pub(crate) fn build2<'a>(&mut self,src:&'a [u8],trgt_start_pos:usize,trgt_len:usize)->SrcMatcher<'a>{
         let InnerConfig { l_step, hash_win_len, src_len, trgt_len, src_win_size, max_end_pos, chain_check, prev_table_capacity } = self.make_inner_config(src.len(),trgt_len);
         let hasher = LargeHashCursor::new(src, hash_win_len);
         let prev_cap = if chain_check == 1 {0}else{prev_table_capacity};
-        let table = BasicHashTable::new(src_win_size/l_step, prev_cap, hash_win_len<=4);
+        let table = BasicHashTable::new(src_win_size/l_step, hash_win_len<=4);
         let mut matcher = SrcMatcher{
             hasher, table, src_len, trgt_len, max_end_pos,
             l_step,
             hash_win_len,
             chain_check,
             half_win_size: src_win_size>>1,
+            chain: ChainList::new(prev_cap),
         };
         //prefill with hash start positions.
         matcher.center_on(trgt_start_pos);
@@ -297,6 +281,7 @@ pub fn src_hash_len(len:usize)->usize{
         9
     }
 }
+
 fn calculate_default_win_size(src_len: usize, trgt_len: usize,max_win_size:Option<usize>) -> usize {
     let mut win_size = (src_len).abs_diff(trgt_len).next_power_of_two();
     if win_size <= MIN_SRC_WIN_SIZE {
@@ -304,6 +289,21 @@ fn calculate_default_win_size(src_len: usize, trgt_len: usize,max_win_size:Optio
     }
     let upper_bound = src_len.next_power_of_two().min(max_win_size.map(|a|a.next_power_of_two()).unwrap_or(DEFAULT_SRC_WIN_SIZE));
     win_size.min(upper_bound)
+}
+
+fn calculate_default_hash_len(src_len: usize, trgt_len: usize,src_win_size:usize) -> usize {
+    let diff = src_len.abs_diff(trgt_len);
+    if diff > src_win_size{return 9} //this suggests a large change on large files.
+    let diff_h_len = Ranger::new(MIN_SRC_WIN_SIZE..DEFAULT_SRC_WIN_SIZE, 9..=5).map(diff);
+    let s_hash_len = src_hash_len(src_len);
+    if src_len >= src_win_size{
+        //we have relatively small diff, but a larger src file
+        return diff_h_len.max(s_hash_len)
+    }
+    //if we are here we have a relatively small file
+    //we might want a smaller hasher since it is changed significantly from src
+    src_hash_len(src_len).min(src_hash_len(trgt_len))
+
 }
 
 /// Calculates the advancement of a sliding window within a source file

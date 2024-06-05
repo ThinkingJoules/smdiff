@@ -15,7 +15,7 @@ There are several ways to configure this encoder, so it should allow for tuning 
 
 
 */
-use crate::{hasher::{HasherCusor, LargeHashCursor, SmallHashCursor}, src_matcher::SrcMatcherConfig, trgt_matcher::TrgtMatcherConfig};
+use crate::{hasher::{HasherCusor, LargeHashCursor}, src_matcher::SrcMatcherConfig, trgt_matcher::TrgtMatcherConfig};
 
 #[allow(unused)]
 #[derive(Copy,Clone,Debug)]
@@ -108,7 +108,7 @@ impl InnerOp {
 }
 
 //we do not do equality check on src and trgt, that is the job of the caller.
-///Returns all possible operations to encode src into trgt.
+/// Returns all possible operations to encode src into trgt.
 /// This means ops may overlap or not.
 /// It is up to the caller to decide how to handle the gaps and overlaps
 pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8])->Vec<InnerOp>{
@@ -159,9 +159,9 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
     //now we decide our matcher configs, at least one of these will be Some.
     let start = std::time::Instant::now();
     let mut trgt_matcher = config.match_trgt.as_mut().map(|c| c.build(trgt, cur_o_pos));
-    let mut src_matcher = config.match_src.as_mut().map(|c| c.build2(src, cur_o_pos, trgt_len));
+    let mut src_matcher = config.match_src.as_mut().map(|c| c.build(src, cur_o_pos, trgt_len));
     let elapsed = start.elapsed();
-    dbg!(elapsed);
+    //dbg!(elapsed);
     let lazy_escape_len = config.lazy_escape_len.unwrap_or(90);
 
     let small_len = trgt_matcher.as_ref()
@@ -194,7 +194,6 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
                 if let Some(matcher) = trgt_matcher.as_mut(){
                     matcher.seek(cur_o_pos);
                 }
-                //dbg!(cur_o_pos);
                 //adjust our min_match so lazy matching works.
                 let last_match_end_pos = ops.last().map(|x|x.o_pos()+x.len()).unwrap_or(0);
                 min_match = if last_match_end_pos > cur_o_pos {
@@ -300,7 +299,7 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
         }
     }
     let elapsed = start.elapsed();
-    dbg!(elapsed);
+    //dbg!(elapsed);
     assert!(cur_o_pos<=trgt_len);
     if max_trgt_match_len < trgt_len{
         //if we had prepended naive test, we need to place all of the src at the end.
@@ -317,7 +316,7 @@ enum EncoderState{
     MoveForwardOneByte,
 }
 
-#[inline]
+#[inline(always)]
 fn find_initial_run_len(seg: &[u8], match_len: usize, run_byte: &mut u8) -> usize {
     let mut run_len = 0;
     let mut last_byte = *run_byte;
@@ -334,7 +333,7 @@ fn find_initial_run_len(seg: &[u8], match_len: usize, run_byte: &mut u8) -> usiz
     run_len
 }
 
-#[inline]
+#[inline(always)]
 fn clear_existing_ops(ops:&mut Vec<InnerOp>,gte_start:usize){
     while ops.last().map(|x|*x.o_pos()).unwrap_or(0) >= gte_start{
         let _evicted = ops.pop().unwrap();

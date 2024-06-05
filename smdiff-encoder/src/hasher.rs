@@ -125,6 +125,7 @@ impl RollingHashConfig {
             precomputed_powers,
         }
     }
+    #[inline(always)]
     pub(crate) fn calculate_large_checksum(&self, data: &[u8]) -> usize {
         assert_eq!(data.len(), self.hash_window_len);
         data.iter()
@@ -135,7 +136,7 @@ impl RollingHashConfig {
             })
     }
 
-
+    #[inline(always)]
     #[cfg(target_pointer_width = "64")]
     pub(crate) fn update_large_checksum(&self, checksum: usize, old:u8, new:u8) -> usize {
         (HASH_MULTIPLIER_64_BIT as usize).wrapping_mul(checksum)
@@ -143,6 +144,7 @@ impl RollingHashConfig {
         .wrapping_add(new as usize)
     }
 
+    #[inline(always)]
     #[cfg(target_pointer_width = "32")]
     pub(crate) fn update_large_checksum(&self, checksum: usize, old:u8, new:u8) -> usize{
         (HASH_MULTIPLIER_32_BIT as usize).wrapping_mul(checksum)
@@ -281,6 +283,7 @@ impl<'a> SmallHashCursor<'a> {
         crsr
     }
     // #[cfg(target_pointer_width = "32")]
+    #[inline(always)]
     fn calc_checksum(&self,position:usize) -> usize {
         let state = if self.win_size == 4 {
             u32::from_ne_bytes(self.slice[position..position + 4].try_into().unwrap())
@@ -300,6 +303,7 @@ impl<'a> SmallHashCursor<'a> {
     // }
 }
 impl HasherCusor for SmallHashCursor<'_> {
+    #[inline(always)]
     fn next(&mut self) -> Option<(usize, usize)> {
         let end_pos = self.rolling_hash_start_pos + self.win_size;
         if end_pos > self.slice.len() {
@@ -311,6 +315,7 @@ impl HasherCusor for SmallHashCursor<'_> {
         self.cur_hash = self.calc_checksum(self.rolling_hash_start_pos);
         Some((hash, start_pos))
     }
+    #[inline(always)]
     fn seek(&mut self, pos: usize) -> Option<usize> {
         if pos == self.rolling_hash_start_pos {
             return Some(self.cur_hash);
@@ -336,7 +341,6 @@ impl HasherCusor for SmallHashCursor<'_> {
 
 #[cfg(test)]
 mod test_super {
-    use crate::hashmap::{BasicHashTable, HashTable};
 
     use super::*;
     #[test]
@@ -389,54 +393,4 @@ mod test_super {
         }
     }
 
-    #[test]
-    fn test_rolling_shash() {
-        let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
-        let config = RollingHashConfig::new(4);
-        let mut mh = RollingHasher::new(&initial_data[..4],&config);
-        let mut crsr = SmallHashCursor::new(initial_data,4);
-        let mut map = BasicHashTable::new(1<<25, 1<<16, true);
-        // Simulate a rolling window
-        let mut hash = config.calculate_large_checksum(&initial_data[..4]);
-        let (crsr_hash,_) = crsr.next().unwrap();
-        //assert_eq!(crsr_hash, hash);
-        for i in 1..(initial_data.len() - 20) {
-            let old_char = initial_data[i - 1];
-            let new_char = initial_data[i + 3];
-            let expected_hash = config.calculate_large_checksum(&initial_data[i..i+4]);
-            hash = config.update_large_checksum(hash, old_char, new_char);
-            //assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
-            mh.update(new_char);
-            //assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
-            let (hash2,pos) = crsr.next().unwrap();
-            dbg!(map.calc_index(hash2));
-            dbg!(map.calc_index(hash));
-            dbg!(hash2,pos,expected_hash);
-            //assert_eq!(pos,i, "HashCrsr wrong output position");
-            //assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
-        }
-    }
-
-    #[test]
-    fn test_shash_cursor() {
-        let data = b"hello world, this is a test of the rolling hash";
-        let config = RollingHashConfig::new(8);
-        let mut cursor = RollingHashCursor::new(data,8,&config);
-        let mut answers = Vec::new();
-        for _ in 0..5{
-            let (hash,pos) = cursor.next().unwrap();
-            answers.push((hash,pos));
-        }
-        answers.sort_by(|a,b|a.0.cmp(&b.0));
-        for (hash,pos) in answers{
-            let new_hash = cursor.seek(pos).unwrap();
-            assert_eq!(hash,new_hash);
-        }
-    }
-    // #[test]
-    // fn test_size() {
-
-    //     dbg!(MediumHashConfig::new(55739802/2, 9));
-    //     dbg!(HASH_MULTIPLIER_64_BIT.wrapping_pow(8));
-    // }
 }

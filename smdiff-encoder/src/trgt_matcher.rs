@@ -1,4 +1,4 @@
-use crate::{hasher::{HasherCusor, SmallHashCursor}, hashmap::{BasicHashTable, HashTable}};
+use crate::{hasher::{HasherCusor, SmallHashCursor}, hashmap::{BasicHashTable, ChainList}, Ranger};
 
 
 
@@ -7,12 +7,13 @@ pub(crate) struct TrgtMatcher<'a>{
     chain_check: usize,
     hasher: SmallHashCursor<'a>,
     table: BasicHashTable,
+    chain: ChainList,
     hash_win_len:usize,
 }
 
 impl<'a> TrgtMatcher<'a> {
-    pub(crate) fn new(compress_early_exit: usize, chain_check: usize,table: BasicHashTable,hash_win_len:usize,hasher: SmallHashCursor<'a>) -> Self {
-        Self { compress_early_exit, chain_check, table, hash_win_len, hasher}
+    pub(crate) fn new(compress_early_exit: usize, chain_check: usize,table: BasicHashTable,hash_win_len:usize,hasher: SmallHashCursor<'a>,chain:ChainList) -> Self {
+        Self { compress_early_exit, chain_check, table, hash_win_len, hasher,chain }
     }
     pub(crate) fn hash_win_len(&self)->usize{
         self.hash_win_len
@@ -31,7 +32,7 @@ impl<'a> TrgtMatcher<'a> {
     }
     pub(crate) fn seek(&mut self, pos:usize){
         debug_assert!(self.hasher.peek_next_pos() <= pos, "self.hasher.peek_next_pos({}) > pos({})",self.hasher.peek_next_pos(),pos);
-        if let Some(hash) = self.hasher.seek(pos) {
+        if let Some(_hash) = self.hasher.seek(pos) {
             //don't store the hash here. We seek before we query,
             // so we want to store using the advance_and_store method.
             // self.store(hash,pos)
@@ -39,8 +40,8 @@ impl<'a> TrgtMatcher<'a> {
     }
     ///Returns (trgt_pos, post_match) post_match *includes* the hash_win_len.
     pub fn find_best_trgt_match(&self,trgt:&[u8],cur_o_pos:usize,hash:usize)->Option<(usize,usize)>{
-        let table_pos = self.table.get_last_pos(self.table.calc_index(hash))?;
-        let mut iter = std::iter::once(table_pos).chain(self.table.iter_prev_starts(table_pos, cur_o_pos)).filter(|start|start + self.hash_win_len < cur_o_pos);
+        let table_pos = self.table.get(hash)?;
+        let mut iter = std::iter::once(table_pos).chain(self.chain.iter_prev_starts(table_pos, cur_o_pos,hash)).filter(|start|start + self.hash_win_len < cur_o_pos);
         let mut chain = self.chain_check;
         let mut best = None;
         let mut best_len = 0;
@@ -90,13 +91,20 @@ impl<'a> TrgtMatcher<'a> {
         //         panic!();
         //     }
         // }
-        //dbg!(self.chain_check-chain);
+        //dbg!(_chain_len,cur_o_pos);
+        //std::thread::sleep(std::time::Duration::from_millis(100));
         best
     }
     pub(crate) fn store(&mut self, hash:usize, pos:usize){
-        let idx = self.table.calc_index(hash);
-        //dbg!(idx, hash, pos);
-        self.table.insert(idx, pos);
+        match self.table.insert(hash, pos){
+            Ok(None) => {},
+            Ok(Some(prev)) => {
+                self.chain.insert(hash, pos, prev);
+            },
+            Err((old_hash,prev_pos)) => {
+                self.chain.insert(old_hash, pos, prev_pos);
+            }
+        }
     }
 }
 
@@ -115,7 +123,7 @@ pub struct TrgtMatcherConfig{
     pub chain_check: usize,
     ///Advanced setting, leave as None for default.
     pub prev_table_capacity: Option<usize>,
-    pub hash_win_len: Option<usize>
+    pub hash_win_len: Option<usize>,
 }
 
 impl Default for TrgtMatcherConfig {
@@ -129,8 +137,8 @@ impl TrgtMatcherConfig {
     /// The higher the level the more accurate the matches but slower.
     pub fn comp_level(level:usize)->Self{
         assert!(level <= 9);
-        let compress_early_exit = 6 + (level*64 / 9); // 6..=70
-        let chain_check = 1 + ((65 * level) / 9); // 1..=66
+        let compress_early_exit = Ranger::new(0..10, 6..=70).map(level);
+        let chain_check = Ranger::new(0..10, 1..=33).map(level);
         Self { compress_early_exit, chain_check, prev_table_capacity: None , hash_win_len: None}
     }
     pub fn with_table_capacity(mut self, table_capacity:usize)->Self{
@@ -148,9 +156,16 @@ impl TrgtMatcherConfig {
         //     }));
         prev_table_capacity.get_or_insert(DEFAULT_PREV_SIZE.min(effective_len.next_power_of_two()>>1));
         //let table = BasicHashTable::new(DEFAULT_TRGT_WIN_SIZE.min((effective_len + (effective_len/2)).next_power_of_two() >> 1), self.prev_table_capacity.unwrap(),if *win_size>4{8}else{4});
-        let table = BasicHashTable::new((1<<25).min((effective_len + (effective_len/2)).next_power_of_two() >> 1), self.prev_table_capacity.unwrap(),*win_size<=4);
+        let table = BasicHashTable::new(DEFAULT_TRGT_WIN_SIZE.min((effective_len + (effective_len/2)).next_power_of_two() >> 1), *win_size<=4);
         let hasher = SmallHashCursor::new(trgt, *win_size);
-        let mut matcher = TrgtMatcher::new(*compress_early_exit, *chain_check, table, *win_size,hasher);
+        let mut matcher = TrgtMatcher::new(
+            *compress_early_exit,
+            *chain_check,
+            table,
+            *win_size,
+            hasher,
+            ChainList::new(self.prev_table_capacity.unwrap())
+        );
         if trgt_start_pos > 0 { //prefill with hash start positions.
             let start = trgt_start_pos.saturating_sub(self.prev_table_capacity.unwrap());
             let end = trgt_start_pos;

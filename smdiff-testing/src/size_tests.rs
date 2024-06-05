@@ -23,7 +23,7 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(target);
     let mut patch = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().format_segregated().set_match_src(SrcMatcherConfig::comp_level(0)))?;
+    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().format_segregated().set_match_src(SrcMatcherConfig::comp_level(9)))?;
     //smdiff_encoder::encode(&mut Cursor::new(Vec::new()), &mut trgt, &mut patch,true)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);

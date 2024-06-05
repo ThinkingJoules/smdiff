@@ -1,17 +1,118 @@
-
-
+/// An offset value to distinguish between empty bucket positions, and real offsets.
 const BUCKET_VALUE_OFFSET: usize = 1;
 
-#[derive(Clone, Debug)]
-struct PrevList {
-    positions: Vec<usize>, // Storage for previous positions
-    mod_mask: usize,       // Mask for modulo operation
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BucketValue{
+    hash:usize,
+    value:usize,
 }
 
-impl PrevList {
+impl BucketValue {
+    fn get_value_unchecked(&self) -> usize {
+        self.value - BUCKET_VALUE_OFFSET
+    }
+    pub(crate) fn get(&self,hash:usize) -> Option<usize> {
+        if self.value == 0 {
+            return None;
+        }
+        if self.hash == hash {
+            Some(self.value - BUCKET_VALUE_OFFSET)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn set(&mut self, hash:usize, value: usize) -> Result<Option<usize>,(usize,usize)> {
+        if self.value == 0 {
+            self.hash = hash;
+            self.value = value + BUCKET_VALUE_OFFSET;
+            return Ok(None);
+        }
+
+        if self.hash == hash {
+            let old = self.value;
+            self.value = value + BUCKET_VALUE_OFFSET;
+            return Ok(Some(old - BUCKET_VALUE_OFFSET));
+        }
+        let old = (self.hash, self.value - BUCKET_VALUE_OFFSET);
+        self.hash = hash;
+        self.value = value + BUCKET_VALUE_OFFSET;
+        Err(old)
+    }
+}
+
+/// A basic hash table implementation.
+/// This is effectively the innards of a HashMap<K, usize> with a fixed size table.
+/// The caller is responsible for hashing K to a usize value.
+/// We expose the bucket index to allow bucket calculation to happen exactly once.
+/// The caller is responsible for dealing with hash collisions.
+/// This way the caller can avoid recalculating the index.
+#[derive(Clone, Debug)]
+pub(crate) struct BasicHashTable {
+    shift_amount: usize,     // Bit shift amount for hash reduction
+    mod_mask: usize,         // Bitmask for hash table indexing
+    buckets: Vec<BucketValue>,     // Power of 2 sized array of positions
+}
+impl BasicHashTable{
+    /// Creates a new BasicHashTable with the given number of slots.
+    /// min_capacity will be rounded up to the next power of 2.
+    /// If interpret_hash_as_32_bit is true, the hash will be interpreted as a 32 bit value, regardless of the std::mem::size_of::<usize>().
+    /// This allows for using small hashes on a 64 bit system.
+    pub(crate) fn new(min_capacity: usize, interpret_hash_as_32_bit:bool) -> Self {
+        let num_bits = determine_hash_table_size_bits(min_capacity);
+        let table_size = 1 << num_bits;
+        let mod_mask = table_size - 1;
+        //let shift_amount = (std::mem::size_of::<usize>() * 8) - num_bits;
+        let base_shift = if interpret_hash_as_32_bit {4} else {std::mem::size_of::<usize>()};
+        let shift_amount = (base_shift * 8) - num_bits;
+        let buckets = vec![BucketValue::default(); table_size];
+        Self {
+            mod_mask,
+            shift_amount,
+            buckets,
+        }
+    }
+}
+impl BasicHashTable {
+    #[inline(always)]
+    pub(crate) fn get(&self,hash:usize)->Option<usize>{
+        let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
+        self.buckets[idx].get(hash)
+    }
+    #[inline(always)]
+    pub(crate) fn insert(&mut self, hash: usize, position: usize) -> Result<Option<usize>,(usize,usize)> {
+        let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
+        self.buckets[idx].set(hash, position)
+    }
+
+}
+
+/// Determines the number of bits to use for the hash table size.
+fn determine_hash_table_size_bits(slots: usize) -> usize {
+    ((slots+1).next_power_of_two().trailing_zeros() as usize)
+        .clamp(3, std::mem::size_of::<usize>() * 8) - 1
+}
+#[inline(always)]
+fn get_bucket_idx(checksum: usize, shift_amt:usize, mod_mask:usize) -> usize {
+   (checksum >> shift_amt) ^ (checksum & mod_mask)
+}
+
+
+
+
+/// This is a chain list to store overflow values from the hash table.
+/// It is an in-memory linked list structure.
+/// This is sort of like an interleaved Vec of Vecs.
+#[derive(Clone, Debug)]
+pub(crate) struct ChainList {
+    positions: Vec<BucketValue>, // Storage for previous positions
+    mod_mask: usize,       // Mask for modulo operation. Buckets must be a power of 2
+}
+
+impl ChainList {
     /// Creates a new PrevList with the given capacity.
     /// Capacity must be a power of 2.
-    fn new(capacity: usize) -> Self {
+    /// Use 0 to short-circuit all functions and not allocate any memory.
+    pub(crate) fn new(capacity: usize) -> Self {
         //assert that capacity is a power of 2
         if capacity == 0 {
             return Self {
@@ -21,54 +122,59 @@ impl PrevList {
         }
         assert_eq!(capacity & (capacity - 1), 0, "Prev Table Capacity ({}) is not a power of 2", capacity);
         Self {
-            positions: vec![0; capacity],
+            positions: vec![BucketValue::default(); capacity],
             mod_mask: capacity - 1,
         }
     }
     /// Gets the previous position for a given position.
     /// last_pos: The current position (BUCKET_VALUE_OFFSET is already subtracted)
     /// Returns the previous position with BUCKET_VALUE_OFFSET subtracted. (or none if bucket value == 0)
-    fn get_prev_pos(&self, last_pos: usize) -> Option<usize> {
+    #[inline(always)]
+    fn get_prev_pos(&self, last_pos: usize) -> Option<&BucketValue> {
         if self.positions.is_empty() {
             return None;
         }
-        let prev_idx_value = self.positions[last_pos & self.mod_mask];
-        if prev_idx_value == 0 {// End of chain or invalid position
+        let prev_idx_value = &self.positions[last_pos & self.mod_mask];
+        if prev_idx_value.value == 0 {// End of chain or invalid position
             return None;
         }
-        Some(prev_idx_value - BUCKET_VALUE_OFFSET)
+        Some(prev_idx_value)
     }
     /// Inserts a new position into the chain.
     /// key: The parent position in the chain (new head) (BUCKET_VALUE_OFFSET is already subtracted)
     /// new_pos: The new position to insert
-    // #[inline(always)]
-    fn insert(&mut self, key_position: usize, position: usize) {
+    #[inline(always)]
+    pub(crate) fn insert(&mut self, hash:usize, key_position: usize, position: usize) {
         if self.positions.is_empty() {return;}
-        *self.positions.get_mut(key_position & self.mod_mask).unwrap() = position + BUCKET_VALUE_OFFSET;
+        let _ = self.positions.get_mut(key_position & self.mod_mask).unwrap().set(hash, position);
+    }
+
+    pub(crate) fn iter_prev_starts<'a>(&'a self, last_pos: usize, cur_out_pos: usize, hash_value:usize) -> PrevPositionIterator<'a>{
+        PrevPositionIterator::new(&self, last_pos, cur_out_pos, hash_value)
     }
 }
-pub struct PrevPositionIterator<'a> {
-    list: &'a PrevList,
+pub(crate) struct PrevPositionIterator<'a> {
+    list: &'a ChainList,
     last_pos: usize,     // Base position for comparison
     cur_out_pos: usize,  // Current output position
-    mod_mask: usize,     // Mask for modulo operation
+    hash_value: usize,     // Mask for modulo operation
 }
 
 impl<'a> PrevPositionIterator<'a> {
-    fn new(list: &'a PrevList, last_pos: usize,cur_out_pos:usize) -> Self {
+    fn new(list: &'a ChainList, last_pos: usize,cur_out_pos:usize, hash_value:usize) -> Self {
         if list.positions.is_empty() {
             return Self {
                 list,
                 last_pos,
                 cur_out_pos,
-                mod_mask: 0,
+                hash_value: 0,
             };
         }
         Self {
             list,
             last_pos,
             cur_out_pos,
-            mod_mask: list.positions.len() - 1,
+            hash_value,
         }
     }
 }
@@ -77,101 +183,27 @@ impl<'a> Iterator for PrevPositionIterator<'a> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let prev_pos = self.list.get_prev_pos(self.last_pos)?;
-        // Check for termination conditions
-        if prev_pos > self.last_pos {
-            return None; // End of chain or invalid position
-        }
-        //This is a valid-looking position, but it may not be part of the chain
-        self.last_pos = prev_pos;
+        loop{
+            let populated_bucket = self.list.get_prev_pos(self.last_pos)?;
+            // Check for termination conditions
+            let prev_pos = populated_bucket.get_value_unchecked(); //safe since get_prev_pos checks
+            if prev_pos > self.last_pos {
+                return None; // End of chain or invalid position
+            }
+            //This is a valid-looking position, but it may not be part of the chain
+            self.last_pos = prev_pos;
 
-        let diff_pos = self.cur_out_pos - self.last_pos;
-        if diff_pos & !self.mod_mask != 0{ //should be the same as diff_pos >= self.list.positions.len()
-            // Exceeded buffer capacity (wrap-around)
-            // This position is technically valid looking, but logically cannot be part of this chain
-            // This position has logically been evicted, but has not been overwritten in the buffer
-            return None;
-        }
-        Some(self.last_pos)
-    }
-}
-// Trait to allow for different hash table implementations.
-pub trait HashTable {
-    /// Calculates the bucket index for a given checksum or data slice.
-    fn calc_index(&self, checksum: usize) -> usize;
-    /// Gets the most recent position found for a given index.
-    fn get_last_pos(&self,index:usize)->Option<usize>;
-    /// Iterates the chained values for a given index.
-    /// Iterator does *not* include the last_pos given as it is needed to generate the iterator.
-    /// If you want to include it do something like: `std::iter::once(last_pos).chain(table.iter_chain_idx(last_pos))`
-    fn iter_prev_starts<'a>(&'a self, last_pos: usize, cur_out_pos:usize) -> PrevPositionIterator<'a>;
+            let diff_pos = self.cur_out_pos - self.last_pos;
+            if diff_pos  >= self.list.positions.len(){
+                // Exceeded buffer capacity (wrap-around)
+                // This position is technically valid looking, but logically cannot be part of this chain
+                // This position has logically been evicted, but has not been overwritten in the buffer
+                return None;
+            }
+            if populated_bucket.hash == self.hash_value {
+                return Some(prev_pos);
+            }
 
-    /// Inserts a position into the chain at the given index.
-    fn insert(&mut self, idx: usize, start_pos: usize);
-}
-#[derive(Clone, Debug)]
-pub(crate) struct BasicHashTable {
-    table_size: usize,       // Number of slots in the hash table
-    shift_amount: usize,     // Bit shift amount for hash reduction
-    mod_mask: usize,         // Bitmask for hash table indexing
-    buckets: Vec<usize>,
-    prev_list: PrevList,
-}
-impl BasicHashTable{
-    pub(crate) fn new(num_slots: usize, prev_start_capacity: usize,checksum_is_32_bit:bool) -> Self {
-        let num_bits = determine_hash_table_size_bits(num_slots);
-        let table_size = 1 << num_bits;
-        let mod_mask = table_size - 1;
-        //let shift_amount = (std::mem::size_of::<usize>() * 8) - num_bits;
-        let base_shift = if checksum_is_32_bit {4} else {std::mem::size_of::<usize>()};
-        let shift_amount = (base_shift * 8) - num_bits;
-        dbg!(table_size, num_bits, num_slots,mod_mask,shift_amount);
-        //let _start = std::time::Instant::now();
-        let prev_list = PrevList::new(prev_start_capacity);
-        //println!("PrevList creation took: {:?}", _start.elapsed());
-        let buckets = vec![0; table_size];
-        Self {
-            mod_mask,
-            table_size,
-            shift_amount,
-            buckets,
-            prev_list,
         }
     }
-}
-impl HashTable for BasicHashTable {
-    fn calc_index(&self, checksum: usize) -> usize {
-        get_bucket_idx(checksum, self.shift_amount, self.mod_mask)
-    }
-    fn get_last_pos(&self,idx:usize)->Option<usize>{
-        let last_pos = self.buckets[idx];
-        if last_pos == 0{
-            return None;
-        }
-        Some(last_pos - BUCKET_VALUE_OFFSET)
-    }
-    fn insert(&mut self, idx: usize, position: usize) {
-        let idx_value = self.buckets[idx];
-        if !self.prev_list.positions.is_empty() && idx_value != 0{
-            //move the old value into the prev list
-            self.prev_list.insert(position, idx_value - BUCKET_VALUE_OFFSET);
-        }
-        //set the new value in the table
-        self.buckets[idx] = position + BUCKET_VALUE_OFFSET;
-    }
-
-    fn iter_prev_starts<'a>(&'a self, last_pos: usize, cur_out_pos: usize) -> PrevPositionIterator<'a>{
-        PrevPositionIterator::new(&self.prev_list, last_pos, cur_out_pos)
-    }
-}
-
-fn determine_hash_table_size_bits(slots: usize) -> usize {
-    let mut i = 3;
-    while i <= std::mem::size_of::<usize>() * 8 && slots >= (1 << i) {
-        i += 1;
-    }
-    i - 1
-}
-fn get_bucket_idx(checksum: usize, shift_amt:usize, mod_mask:usize) -> usize {
-   (checksum >> shift_amt) ^ (checksum & mod_mask)
 }
