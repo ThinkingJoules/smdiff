@@ -1,21 +1,32 @@
 
-
+/// Bits for the operation type
 pub const OP_MASK: u8 = 0b11000000;
+/// Copy from dictionary bit flag value
 pub const COPY_D: u8 = 0b00000000;
+/// Copy from output bit flag value
 pub const COPY_O: u8 = 0b01000000;
+/// Add bit flag value
 pub const ADD: u8 = 0b10000000;
+/// Run bit flag value
 pub const RUN: u8 = 0b11000000;
+/// Bits for the Size Value
 pub const SIZE_MASK: u8 = 0b00111111;
-///Inclusive Upper Bound
+/// Inclusive Upper Bound
 pub const MAX_RUN_LEN:u8 = 62;
-///Inclusive Upper Bound
+/// Inclusive Upper Bound
 pub const MAX_INST_SIZE:usize = u16::MAX as usize;
-///Inclusive Upper Bound
+/// Inclusive Upper Bound
 pub const MAX_WIN_SIZE:usize = (1<<24) - 1; // 16MB
 
+/// Format of the how a section is laid out.
+/// * Interleaved: The Add bytes follow each Add Opertion
+/// * Segregated: All Add bytes are at the end of the section
+/// default: Interleaved
 #[derive(Copy,Clone,Debug, PartialEq, Eq)]
 pub enum Format {
+    /// The Add bytes follow each Add Opertion
     Interleaved,
+    /// All Add bytes are at the end of the section
     Segregated,
 }
 impl Default for Format {
@@ -32,30 +43,44 @@ impl Format {
         matches!(self, Format::Segregated)
     }
 }
+/// Header struct for a section
 #[derive(Copy,Clone,Debug,Default, PartialEq)]
 pub struct SectionHeader {
+    /// Should be a value between 0-7 per the spec
     pub compression_algo: u8,
     pub format: Format,
+    /// true if there are more sections to decode after this one.
+    /// false if this is the last section
+    /// default: false
     pub more_sections: bool,
+    /// Total number of operations in the section
     pub num_operations: u32,
-    ///Total Add bytes at end of window
+    /// Total Add bytes at the end of the section (not needed for interleaved format)
     pub num_add_bytes: u32,
-    ///Total output size of window operations
+    /// Total output size generated from the operations in this section
+    /// Maximum value should not exceed (1<<24) - 1
     pub output_size: u32,
 }
 
 impl SectionHeader {
+    /// Create a new SectionHeader with the given parameters
+    /// * num_operations: Total number of operations in the section
+    /// * num_add_bytes: Total Add bytes at the end of the section (not needed for interleaved format)
+    /// * output_size: Total output size generated from the operations in this section
     pub fn new(num_operations: u32, num_add_bytes: u32, output_size: u32) -> Self {
         Self { num_operations, num_add_bytes, output_size, ..Default::default() }
     }
+    /// Set the compression algorithm to use for this section
+    /// * compression_algo: Should be a value between 0-7 per the spec
     pub fn set_compression_algo(mut self, compression_algo: u8) -> Self {
-        self.compression_algo = compression_algo;
+        self.compression_algo = compression_algo.clamp(0, 7);
         self
     }
     pub fn set_format(mut self, format: Format) -> Self {
         self.format = format;
         self
     }
+    /// Indicate if this section is *not* the last section
     pub fn set_more_sections(mut self, more_sections: bool) -> Self {
         self.more_sections = more_sections;
         self
@@ -69,15 +94,26 @@ impl SectionHeader {
     }
 }
 
+/// Trait for the Add Operation
+/// Depending on the usage, we may want to store the Add bytes in different ways
+/// This trait allows for different implementations of the Add Operation within an Op
 pub trait AddOp{
+    /// Get the bytes for the Add Operation
     fn bytes(&self) -> &[u8];
 }
 
+/// Run Operation
+/// * byte: The byte to repeat
+/// * len: The number of times to repeat the byte (1-62)
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Run{
     pub byte: u8,
     pub len: u8,
 }
+/// Copy Operation
+/// * src: The source of the copy (Dict or Output)
+/// * addr: The absolute start position in the src to start copying from
+/// * len: The number of bytes to copy.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Copy{
     pub src: CopySrc,
@@ -85,12 +121,18 @@ pub struct Copy{
     pub len: u16,
 }
 
+/// Where the Copy Operation should copy from.
+/// * Dict: Copy from the dictionary (source file)
+/// * Output: Copy from the output buffer (output file)
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CopySrc{
     Dict,
     Output,
 }
-
+/// Enum for the different types of operations
+/// * Run: Repeat a byte a number of times
+/// * Copy: Copy bytes from a source to the output
+/// * Add: Add bytes to the output
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Op<A>{
     Run(Run),
@@ -98,6 +140,8 @@ pub enum Op<A>{
     Add(A),
 }
 impl<A> Op<A> {
+    /// Get the bit flag for the operation type.
+    /// This is per the spec.
     pub fn bit_flag(&self) -> u8 {
         match self {
             Op::Run(_) => RUN,
@@ -126,6 +170,7 @@ impl<A> Op<A> {
     }
 }
 impl<A:AddOp> Op<A> {
+    /// Get the total number of bytes this operation will generate in the output stream.
     pub fn oal(&self) -> u16 {
         match &self {
             Op::Add(add) => add.bytes().len() as u16,
@@ -136,7 +181,9 @@ impl<A:AddOp> Op<A> {
 }
 
 
-/// Used to determine how the size should be handled
+/// Used to determine how the size should be handled.
+///
+/// This is mostly to aid in control flow for encoding/decoding the size of an operation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Size{
     Done(u8),
@@ -145,6 +192,8 @@ pub enum Size{
 }
 
 impl Size {
+    /// How many bytes will the Size Indicator be in the patch file.
+    /// * 0 represents no Size Indicator is present.
     pub fn size_overhead(&self) -> usize {
         match self {
             Size::Done(_) => 0,
@@ -153,6 +202,8 @@ impl Size {
         }
     }
 }
+/// Used to determine how an operation of `size` (oal) should be encoded.
+#[inline]
 pub fn size_routine(size: u16)->Size{
     match size {
         1..=62 => Size::Done(size as u8),
@@ -161,14 +212,19 @@ pub fn size_routine(size: u16)->Size{
     }
 }
 
+/// Convert an i64 to a u64 using ZigZag encoding.
+#[inline]
 pub fn zigzag_encode(n: i64) -> u64 {
     ((n << 1) ^ (n >> 63)) as u64
 }
 
+/// Convert a u64 to an i64 using ZigZag decoding.
+#[inline]
 pub fn zigzag_decode(z: u64) -> i64 {
     ((z >> 1) as i64) ^ -((z & 1) as i64)
 }
 
+/// Write a u64 value to the writer using u-varint encoding.
 pub fn write_u_varint<W: std::io::Write>(writer: &mut W, mut n: u64) -> std::io::Result<()> {
     let mut buf = [0u8; 10]; // Max length for u-varint encoding of u64
     let mut i = 0;
@@ -180,6 +236,8 @@ pub fn write_u_varint<W: std::io::Write>(writer: &mut W, mut n: u64) -> std::io:
     buf[i] = n as u8;
     writer.write_all(&buf[..=i])
 }
+
+/// Read a u64 value from the reader at its current position using u-varint decoding.
 pub fn read_u_varint<R: std::io::Read>(reader: &mut R) -> std::io::Result<u64> {
     let mut result = 0u64;
     let mut shift = 0;
@@ -196,34 +254,42 @@ pub fn read_u_varint<R: std::io::Read>(reader: &mut R) -> std::io::Result<u64> {
     Ok(result)
 }
 
-
-
-
+/// Write an i64 value to the writer using i-varint encoding.
 pub fn write_i_varint<W: std::io::Write>(writer: &mut W, n: i64) -> std::io::Result<()> {
     write_u_varint(writer, zigzag_encode(n as i64))
 }
 
+/// Read an i64 value from the reader at its current position using i-varint decoding.
 pub fn read_i_varint<R: std::io::Read>(reader: &mut R) -> std::io::Result<i64> {
     Ok(zigzag_decode(read_u_varint(reader)?))
 }
 
+/// Read a u8 value from the reader at its current position.
 pub fn read_u8<R: std::io::Read>(reader: &mut R) -> std::io::Result<u8> {
     let mut buf = [0u8; 1];
     reader.read_exact(&mut buf)?;
     Ok(buf[0])
 }
+
+/// Write a u8 value to the writer.
 pub fn write_u8<W: std::io::Write>(writer: &mut W, n: u8) -> std::io::Result<()> {
     writer.write_all(&[n])
 }
+
+/// Read a u16(little-endian) value from the reader at its current position.
 pub fn read_u16<R: std::io::Read>(reader: &mut R) -> std::io::Result<u16> {
     let mut buf = [0u8; 2];
     reader.read_exact(&mut buf)?;
     Ok(u16::from_le_bytes(buf))
 }
+
+/// Write a u16(little-endian) value to the writer.
 pub fn write_u16<W: std::io::Write>(writer: &mut W, n: u16) -> std::io::Result<()> {
     writer.write_all(&n.to_le_bytes())
 }
 
+/// Helper fn to determine how many bytes a given u64 will take when encoded using u-varint.
+#[inline]
 pub fn u_varint_encode_size(n: u64) -> usize {
     let mut size = 1;
     let mut n = n >> 7;
@@ -234,6 +300,8 @@ pub fn u_varint_encode_size(n: u64) -> usize {
     size
 }
 
+/// Helper fn to 'decode' a copy address from an i64 to the actual absolute address.
+#[inline]
 pub fn diff_addresses_to_u64(cur: u64, input: i64) -> u64 {
     if input >= 0 {
         // Safe to convert i64 to u64 because i is non-negative
@@ -245,6 +313,8 @@ pub fn diff_addresses_to_u64(cur: u64, input: i64) -> u64 {
     }
 }
 
+/// Helper fn to 'encode' a copy address from an absolute position (u64) to the relative difference from the last used absolute address.
+#[inline]
 pub fn diff_addresses_to_i64(cur: u64, target: u64) -> i64 {
     if target > cur {
         (target - cur) as i64

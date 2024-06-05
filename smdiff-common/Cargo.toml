@@ -1,8 +1,9 @@
 [package]
 name = "smdiff-common"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository = "https://github.com/ThinkingJoules/smdiff"
+description = "Common structs, functions, and traits for smdiff format"
+license = "MIT"
 
 [dependencies]
