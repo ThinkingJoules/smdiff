@@ -4,7 +4,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 use std::time::Instant;
 
-use smdiff_reader::{read_ops_no_comp, SectionReader};
+use smdiff_reader::{read_ops_no_comp, SectionIterator};
 
 use crate::{Stats, DIR_PATH};
 use colored::*;
@@ -20,8 +20,8 @@ pub fn vc_analysis()-> Result<(), Box<dyn std::error::Error>> {
     let duration = start.elapsed();
     println!("Time elapsed in convert_vcdiff_to_smdiff() is: {:?}", duration);
     let sm_patch = Cursor::new(converted_a);
-    let mut sec = SectionReader::new(sm_patch);
-    while let Some(res) = sec.next(){
+    let mut sec = SectionIterator::new(sm_patch);
+    while let Some(res) = sec.next_borrowed(){
         let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
@@ -175,8 +175,8 @@ pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
 
     println!("{:?}", converted_c);
     let reader = Cursor::new(converted_c);
-    let mut sec = SectionReader::new(reader);
-    while let Some(res) = sec.next(){
+    let mut sec = SectionIterator::new(reader);
+    while let Some(res) = sec.next_borrowed(){
         let (ops,header) = res?;
         for op in ops {
             println!("{:?}", op);

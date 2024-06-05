@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use smdiff_encoder::{EncoderConfig, SrcMatcherConfig, TrgtMatcherConfig};
-use smdiff_reader::SectionReader;
+use smdiff_reader::SectionIterator;
 
 use crate::{Stats, DIR_PATH};
 
@@ -29,8 +29,8 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size: {}", patch.len());
 
-    let mut sec = SectionReader::new(Cursor::new(patch));
-    while let Some(res) = sec.next(){
+    let mut sec = SectionIterator::new(Cursor::new(patch));
+    while let Some(res) = sec.next_borrowed(){
         let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
@@ -106,8 +106,8 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size: {}", patch.len());
 
-    let mut sec = SectionReader::new(Cursor::new(patch));
-    while let Some(res) = sec.next(){
+    let mut sec = SectionIterator::new(Cursor::new(patch));
+    while let Some(res) = sec.next_borrowed(){
         let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
@@ -183,8 +183,8 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size: {}", patch.len());
 
-    let mut sec = SectionReader::new(Cursor::new(patch));
-    while let Some(res) = sec.next(){
+    let mut sec = SectionIterator::new(Cursor::new(patch));
+    while let Some(res) = sec.next_borrowed(){
         let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
