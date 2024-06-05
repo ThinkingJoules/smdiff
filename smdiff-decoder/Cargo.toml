@@ -8,6 +8,5 @@ edition = "2021"
 [dependencies]
 smdiff-common ={ path = "../smdiff-common" }
 smdiff-reader ={ path = "../smdiff-reader" }
-zstd = "0.13.1"
-ruzstd = "0.6.0"
+ruzstd = "0.7.0"
 brotlic = "0.8.2"

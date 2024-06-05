@@ -50,14 +50,16 @@ pub fn read_section_header<R: std::io::Read>(reader: &mut R) -> std::io::Result<
     })
 }
 
-pub fn read_ops<R: std::io::Read>(reader: &mut R, header:&SectionHeader)-> std::io::Result<Vec<Op>>{
+
+pub fn read_ops_no_comp<R: std::io::Read>(reader: &mut R, header:&SectionHeader,op_buffer:&mut Vec<Op>)-> std::io::Result<()>{
     let SectionHeader { format, num_operations, output_size, .. } = header;
     //dbg!(&header);
     let mut cur_d_addr = 0;
     let mut cur_o_addr = 0;
+    op_buffer.reserve(*num_operations as usize);
     match format {
         Format::Segregated => {
-            let mut output = Vec::with_capacity(*num_operations as usize);
+            let buffer_offset = op_buffer.len();
             let mut add_idxs = Vec::new();
             let mut check_size = 0;
             //dbg!(num_operations,output_size,num_add_bytes);
@@ -65,9 +67,9 @@ pub fn read_ops<R: std::io::Read>(reader: &mut R, header:&SectionHeader)-> std::
                 let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr,false)?;
                 check_size += op.oal() as u32;
                 if op.is_add(){
-                    add_idxs.push(i as usize);
+                    add_idxs.push(buffer_offset+i as usize);
                 }
-                output.push(op);
+                op_buffer.push(op);
             }
             if &check_size != output_size{
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Window Header output size: {} != Sum(ops.oal()) {}",output_size,check_size)));
@@ -75,34 +77,33 @@ pub fn read_ops<R: std::io::Read>(reader: &mut R, header:&SectionHeader)-> std::
             //reader should be at the end of the instructions
             //now we go back and fill the add op buffers
             for i in add_idxs{
-                let op = output.get_mut(i).unwrap();
+                let op = op_buffer.get_mut(i).unwrap();
                 if let Op::Add(add) = op{
                     reader.read_exact(&mut add.bytes)?;
                 }
             }
-            Ok(output)
+            Ok(())
         },
         Format::Interleaved => {
-            let mut output = Vec::with_capacity(*num_operations as usize);
             let mut check_size = 0;
             for _ in 0..*num_operations {
                 let op = read_op(reader, &mut cur_d_addr, &mut cur_o_addr,true)?;
                 check_size += op.oal() as u32;
-                output.push(op);
+                op_buffer.push(op);
             }
             if &check_size != output_size{
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Window Header output size: {} != Sum(ops.oal()) {}",output_size,check_size)));
             }
-            Ok(output)
+            Ok(())
         }
     }
 }
 
 ///Returns the ops and the output size. Cannot be compressed
-pub fn read_section<R: std::io::Read>(reader: &mut R) -> std::io::Result<(Vec<Op>,SectionHeader)> {
+pub fn read_section<R: std::io::Read>(reader: &mut R,op_buffer:&mut Vec<Op>) -> std::io::Result<SectionHeader> {
     let header = read_section_header(reader)?;
-    let ops = read_ops(reader, &header)?;
-    Ok((ops,header))
+    read_ops_no_comp(reader, &header,op_buffer)?;
+    Ok(header)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -170,35 +171,37 @@ fn read_op<R: std::io::Read>(reader: &mut R,cur_d_addr:&mut u64,cur_o_addr:&mut 
 pub struct SectionReader<R>{
     source: R,
     done:bool,
+    op_buffer: Vec<Op>,
 }
 impl<R: Read> SectionReader<R>{
     pub fn new(source: R) -> Self {
         Self {
             source,
             done:false,
+            op_buffer: Vec::new(),
         }
     }
-    pub fn next(&mut self) -> std::io::Result<Option<(Vec<Op>,SectionHeader)>> {
+    pub fn next(&mut self) -> Option<std::io::Result<(&[Op],SectionHeader)>> {
         if self.done{
-            return Ok(None);
+            return None;
         }
-        let (ops,header) = match read_section(&mut self.source){
+        self.op_buffer.clear();
+        let header = match read_section(&mut self.source,&mut self.op_buffer){
             Ok(v) => v,
-            Err(e) => return Err(e),
+            Err(e) => return Some(Err(e)),
 
         };
         if !header.more_sections{
             self.done = true;
         }
-        Ok(Some((ops,header)))
+        Some(Ok((self.op_buffer.as_slice(),header)))
     }
     pub fn into_inner(self) -> R {
         self.source
     }
 }
 
-
-#[cfg(test)] // Include this section only for testing
+#[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
@@ -225,9 +228,11 @@ mod tests {
             129, //ADD, Size 1 0b10_000001
             111 //'o'
         ];
-        let mut reader = Cursor::new(answer);
-        for (op,answer) in read_section(&mut reader).unwrap().0.into_iter().zip(ops) {
-            assert_eq!(op, answer);
+        let mut reader = SectionReader::new(Cursor::new(answer));
+        while let Some(Ok((read_ops,_))) = reader.next(){
+            for (op,answer) in read_ops.iter().zip(ops.clone()) {
+                assert_eq!(op, &answer);
+            }
         }
 
     }
@@ -255,9 +260,11 @@ mod tests {
             70, //COPY_O, Size 6 0b01_000110
             0, //addr ivar int 0
         ];
-        let mut reader = Cursor::new(answer);
-        for (op,answer) in read_section(&mut reader).unwrap().0.into_iter().zip(ops) {
-            assert_eq!(op, answer);
+        let mut reader = SectionReader::new(Cursor::new(answer));
+        while let Some(Ok((read_ops,_))) = reader.next(){
+            for (op,answer) in read_ops.iter().zip(ops.clone()) {
+                assert_eq!(op, &answer);
+            }
         }
     }
     #[test]
@@ -312,11 +319,12 @@ mod tests {
             70, //COPY_O, Size 6 0b01_000110
             0, //addr ivar int 0
         ];
-        let mut reader = Cursor::new(answer);
-        for i in 0..4{
-            let (read_ops,_) = read_section(&mut reader).unwrap();
-            for (op,answer) in read_ops.into_iter().zip(ops[i].clone()) {
-                assert_eq!(op, answer);
+        let mut reader = SectionReader::new(Cursor::new(answer));
+        let mut ops_iter = ops.iter();
+        while let Some(Ok((read_ops,_))) = reader.next(){
+            let ans_ops = ops_iter.next().unwrap();
+            for (op,answer) in read_ops.iter().zip(ans_ops.clone()) {
+                assert_eq!(op, &answer);
             }
         }
 
@@ -398,11 +406,12 @@ mod tests {
             46, //'.'
         ];
 
-        let mut reader = Cursor::new(answer);
-        for i in 0..6{
-            let (read_ops,_) = read_section(&mut reader).unwrap();
-            for (op,answer) in read_ops.into_iter().zip(ops[i].clone()) {
-                assert_eq!(op, answer);
+        let mut reader = SectionReader::new(Cursor::new(answer));
+        let mut ops_iter = ops.iter();
+        while let Some(Ok((read_ops,_))) = reader.next(){
+            let ans_ops = ops_iter.next().unwrap();
+            for (op,answer) in read_ops.iter().zip(ans_ops.clone()) {
+                assert_eq!(op, &answer);
             }
         }
     }

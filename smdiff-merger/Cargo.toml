@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 smdiff-common ={ path = "../smdiff-common" }
 smdiff-reader ={ path = "../smdiff-reader" }
+smdiff-decoder ={ path = "../smdiff-decoder" }
 smdiff-writer ={ path = "../smdiff-writer" }
 
 [dev-dependencies]
-smdiff-decoder ={ path = "../smdiff-decoder" }

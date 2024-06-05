@@ -30,7 +30,8 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     println!("Patch size: {}", patch.len());
 
     let mut sec = SectionReader::new(Cursor::new(patch));
-    while let Ok(Some((ops,_))) = sec.next(){
+    while let Some(res) = sec.next(){
+        let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
         let mut stats = Stats::new();
@@ -106,7 +107,8 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
     println!("Patch size: {}", patch.len());
 
     let mut sec = SectionReader::new(Cursor::new(patch));
-    while let Ok(Some((ops,_))) = sec.next(){
+    while let Some(res) = sec.next(){
+        let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
         let mut stats = Stats::new();
@@ -182,7 +184,8 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
     println!("Patch size: {}", patch.len());
 
     let mut sec = SectionReader::new(Cursor::new(patch));
-    while let Ok(Some((ops,_))) = sec.next(){
+    while let Some(res) = sec.next(){
+        let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
         let mut stats = Stats::new();

@@ -1,7 +1,8 @@
 use std::io::{Read, Seek, Write};
 
 use smdiff_common::{Format, Run, SectionHeader, MAX_INST_SIZE, MAX_WIN_SIZE};
-use smdiff_reader::{Op, SectionReader};
+use smdiff_decoder::reader::SectionReader;
+use smdiff_reader::Op;
 
 
 ///Extracted Instruction with the starting position in the output buffer.
@@ -174,8 +175,10 @@ pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<
     let mut reader = SectionReader::new(patch);
     let mut o_pos_start = 0;
     let mut stats = Stats::new();
-    while let Ok(Some((insts,_output_size))) = reader.next() {
+    while let Some(res) = reader.next() {
+        let (insts,_output_size) = res?;
         for inst in insts{
+            let inst = inst.clone();
             let oal_len = inst.oal() as usize;
             match &inst{
                 smdiff_common::Op::Run(_) => {

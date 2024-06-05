@@ -1,7 +1,7 @@
-use std::{fmt::Debug, io::{BufReader, Read, Seek, Write}};
+use std::{fmt::Debug, io::{Read, Seek, Write}};
 
+use reader::SectionReader;
 use smdiff_common::SectionHeader;
-use smdiff_reader::read_ops;
 
 pub mod zstd{
     pub use ruzstd::streaming_decoder::StreamingDecoder;
@@ -9,6 +9,7 @@ pub mod zstd{
 pub mod brotli{
     pub use brotlic::DecompressorReader;
 }
+pub mod reader;
 ///Applies a SMDiff patch to a source buffer
 /// # Arguments
 /// * `patch` - A Read object that contains the SMDiff patch data
@@ -16,35 +17,16 @@ pub mod brotli{
 /// * `sink` - A Write object that will receive the patched data
 /// # Errors
 /// Returns an error if there is an issue reading from the patch or source data, or writing to the sink
-pub fn apply_patch<P:Read+Debug,R:Read+Seek,W:Write>(patch:&mut P,mut src:Option<&mut R>,sink:&mut W) -> std::io::Result<()> {
+pub fn apply_patch<P:Read+Seek+Debug,R:Read+Seek,W:Write>(patch:&mut P,mut src:Option<&mut R>,sink:&mut W) -> std::io::Result<()> {
     //to avoid the Read+Seek bound on sink,
     //we need to scan the whole patch file so we can cache the TargetSourced windows
     let mut cur_o = Vec::new();
-    let mut cur_o_pos = 0;
+    let mut cur_o_pos: usize = 0;
     //let mut stats = Stats::default();
-    let mut win_data = Vec::new();
-    let mut patch_reader = BufReader::new(patch);
-    loop {
-        let header = smdiff_reader::read_section_header(&mut patch_reader)?;
-        //dbg!(&header);
-        if header.compression_algo == 1 {
-            apply_no_sec_comp::<_,R,_>(&mut patch_reader, None, &mut win_data)?;
-            let mut crsr = std::io::Cursor::new(&win_data);
-            read_ops_no_comp::<_,_,W>(&mut crsr,&mut src, &header,&mut cur_o, &mut cur_o_pos)?;
-        }else if header.compression_algo == 2 {
-            let mut zstd = ruzstd::StreamingDecoder::new(&mut patch_reader).unwrap();
-            read_ops_no_comp::<_,_,W>(&mut zstd,&mut src, &header,&mut cur_o, &mut cur_o_pos)?;
-        }else if header.compression_algo == 3 {
-            let mut brot = brotlic::DecompressorReader::new(patch_reader);
-            read_ops_no_comp::<_,_,W>(&mut brot,&mut src, &header,&mut cur_o, &mut cur_o_pos)?;
-            patch_reader = brot.into_inner().unwrap();
-        }else{
-            read_ops_no_comp::<_,_,W>(&mut patch_reader,&mut src, &header,&mut cur_o, &mut cur_o_pos)?;
-        };
-        if !header.more_sections{
-            break;
-        }
-        win_data.clear();
+    let mut reader = SectionReader::new(patch);
+    while let Some(res) = reader.next(){
+        let (ops,header) = res?;
+        output_ops_no_comp(ops, &mut src, &header,&mut cur_o, &mut cur_o_pos)?;
     }
     sink.write_all(&cur_o)?;
     Ok(())
@@ -53,20 +35,18 @@ pub fn apply_patch<P:Read+Debug,R:Read+Seek,W:Write>(patch:&mut P,mut src:Option
 fn apply_no_sec_comp<P:Read,R:Read+Seek,W:Write>(patch:&mut P,mut src:Option<&mut R>,sink:&mut W) -> std::io::Result<()> {
     let mut cur_o = Vec::new();
     let mut cur_o_pos = 0;
-    loop {
-        let header = smdiff_reader::read_section_header(patch)?;
-        read_ops_no_comp::<_,_,W>(patch, &mut src, &header,&mut cur_o, &mut cur_o_pos)?;
-        if !header.more_sections{
-            break;
-        }
+    let mut reader = smdiff_reader::SectionReader::new(patch);
+    while let Some(res) = reader.next(){
+        let (ops,header) = res?;
+        output_ops_no_comp(ops, &mut src, &header,&mut cur_o, &mut cur_o_pos)?;
+
     }
     sink.write_all(&cur_o)?;
     Ok(())
 }
 
-fn read_ops_no_comp<P:Read,R:Read+Seek,W:Write>(patch:&mut P,src:&mut Option<&mut R>,header:&SectionHeader,cur_o:&mut Vec<u8>, cur_o_pos: &mut usize) -> std::io::Result<()> {
+fn output_ops_no_comp<R:Read+Seek>(ops:&[smdiff_reader::Op],src:&mut Option<&mut R>,header:&SectionHeader,cur_o:&mut Vec<u8>, cur_o_pos: &mut usize) -> std::io::Result<()> {
     //let mut stats = Stats::default();
-    let ops =  read_ops(patch, &header)?;
     let out_size = header.output_size as usize;
     cur_o.reserve_exact(out_size);
     cur_o.resize(cur_o.len() + out_size, 0);

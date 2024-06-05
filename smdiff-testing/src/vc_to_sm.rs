@@ -4,7 +4,7 @@ use std::io::{Cursor, Read};
 use std::path::Path;
 use std::time::Instant;
 
-use smdiff_reader::{read_ops, SectionReader};
+use smdiff_reader::{read_ops_no_comp, SectionReader};
 
 use crate::{Stats, DIR_PATH};
 use colored::*;
@@ -20,8 +20,9 @@ pub fn vc_analysis()-> Result<(), Box<dyn std::error::Error>> {
     let duration = start.elapsed();
     println!("Time elapsed in convert_vcdiff_to_smdiff() is: {:?}", duration);
     let sm_patch = Cursor::new(converted_a);
-    let mut reader = SectionReader::new(sm_patch);
-    while let Ok(Some((ops,_))) = reader.next(){
+    let mut sec = SectionReader::new(sm_patch);
+    while let Some(res) = sec.next(){
+        let (ops,_) = res?;
         let mut s_copy_lens = HashMap::new();
         let mut t_copy_lens = HashMap::new();
         let mut stats = Stats::new();
@@ -173,12 +174,14 @@ pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
     println!("Converted as % of original: {}", (converted_c.len() as f64 / reader.get_ref().len() as f64) * 100.0);
 
     println!("{:?}", converted_c);
-    let mut reader = Cursor::new(converted_c);
-    let header = smdiff_reader::read_section_header(&mut reader)?;
-    let ops = read_ops(&mut reader,&header)?;
-    for op in ops {
-        println!("{:?}", op);
+    let reader = Cursor::new(converted_c);
+    let mut sec = SectionReader::new(reader);
+    while let Some(res) = sec.next(){
+        let (ops,header) = res?;
+        for op in ops {
+            println!("{:?}", op);
+        }
+        println!("output_size {:?}", header.output_size);
     }
-    println!("output_size {:?}", header.output_size);
     Ok(())
 }
