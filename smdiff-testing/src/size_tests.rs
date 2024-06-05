@@ -65,7 +65,7 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
         // }
     }
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = sec.into_inner();
@@ -74,6 +74,7 @@ pub fn encode_test_large()-> Result<(), Box<dyn std::error::Error>> {
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != target{
         //find the first mismatch
@@ -142,7 +143,7 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = sec.into_inner();
@@ -151,6 +152,7 @@ pub fn encode_test_small()-> Result<(), Box<dyn std::error::Error>> {
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != target{
         //find the first mismatch
@@ -219,7 +221,7 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = sec.into_inner();
@@ -228,6 +230,7 @@ pub fn encode_test_micro()-> Result<(), Box<dyn std::error::Error>> {
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != target{
         //find the first mismatch

@@ -86,7 +86,7 @@ pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
     let mut src = Vec::new();
     file.read_to_end(&mut src)?;
     let mut src = Cursor::new(src);
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let mut reader = Cursor::new(converted_a);
     let start = Instant::now();
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm)?;
@@ -96,6 +96,7 @@ pub fn vc_to_sm_test()-> Result<(), Box<dyn std::error::Error>> {
     let mut target = Vec::new();
     file.read_to_end(&mut target)?;
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
     if decode_sm != target{
         //print len
         eprintln!("ERROR: Decoded: {} != Target: {}", decode_sm.len(), target.len());

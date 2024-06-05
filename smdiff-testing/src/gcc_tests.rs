@@ -15,21 +15,22 @@ pub fn encode_test_gcc_2951_2952(config:&EncoderConfig)-> Result<(), Box<dyn std
     f_2952.read_to_end(&mut f_2952_bytes).unwrap();
     let mut src = Cursor::new(Vec::new());
     let mut trgt = Cursor::new(f_2952_bytes);
-    let mut patch = Vec::new();
+    let mut patch = Cursor::new(Vec::new());
     let start = Instant::now();
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().no_match_src())?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
-    println!("Patch size Target Only (Compress): {}", patch.len());
+    println!("Patch size Target Only (Compress): {}", patch.get_ref().len());
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
-    let mut reader = Cursor::new(patch);
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+    patch.rewind()?;
+    smdiff_decoder::apply_patch(&mut patch,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
     let f_2952_bytes = trgt.into_inner();
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != f_2952_bytes{
         //find the first mismatch
@@ -52,21 +53,22 @@ pub fn encode_test_gcc_2951_2952(config:&EncoderConfig)-> Result<(), Box<dyn std
     f_2951.read_to_end(&mut f_2951_bytes).unwrap();
     let mut src = Cursor::new(f_2951_bytes);
     let mut trgt = Cursor::new(f_2952_bytes);
-    let mut patch = Vec::new();
+    let mut patch = Cursor::new(Vec::new());
     let start = Instant::now();
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().no_match_target())?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
-    println!("Patch size SRC only: {}", patch.len());
+    println!("Patch size SRC only: {}", patch.get_ref().len());
     let f_2952_bytes = trgt.into_inner();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
-    let mut reader = Cursor::new(patch);
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+    patch.rewind()?;
+    smdiff_decoder::apply_patch(&mut patch,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != f_2952_bytes{
         //find the first mismatch
@@ -86,21 +88,22 @@ pub fn encode_test_gcc_2951_2952(config:&EncoderConfig)-> Result<(), Box<dyn std
 
     src.rewind()?;
     let mut trgt = Cursor::new(f_2952_bytes);
-    let mut patch = Vec::new();
+    let mut patch = Cursor::new(Vec::new());
     let start = Instant::now();
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,config)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
-    println!("Patch size SRC+TRGT: {}", patch.len());
+    println!("Patch size SRC+TRGT: {}", patch.get_ref().len());
     let f_2952_bytes = trgt.into_inner();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
-    let mut reader = Cursor::new(patch);
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+    patch.rewind()?;
+    smdiff_decoder::apply_patch(&mut patch,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != f_2952_bytes{
         //find the first mismatch
@@ -127,21 +130,22 @@ pub fn encode_test_gcc_2952_2953(config:&EncoderConfig)-> Result<(), Box<dyn std
     let mut f_2953_bytes = Vec::new();
     f_2953.read_to_end(&mut f_2953_bytes).unwrap();
     let mut trgt = Cursor::new(f_2953_bytes);
-    let mut patch = Vec::new();
+    let mut patch = Cursor::new(Vec::new());
     let start = Instant::now();
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().no_match_src()).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
-    println!("Patch size Target Only (Compress): {}", patch.len());
+    println!("Patch size Target Only (Compress): {}", patch.get_ref().len());
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
-    let mut reader = Cursor::new(patch);
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+    patch.rewind()?;
+    smdiff_decoder::apply_patch(&mut patch,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
     let f_2953_bytes = trgt.into_inner();
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != f_2953_bytes{
         //find the first mismatch
@@ -164,21 +168,22 @@ pub fn encode_test_gcc_2952_2953(config:&EncoderConfig)-> Result<(), Box<dyn std
     f_2952.read_to_end(&mut f_2952_bytes).unwrap();
     let mut src = Cursor::new(f_2952_bytes);
     let mut trgt = Cursor::new(f_2953_bytes);
-    let mut patch = Vec::new();
+    let mut patch = Cursor::new(Vec::new());
     let start = Instant::now();
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&config.clone().no_match_target())?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
-    println!("Patch size SRC only: {}", patch.len());
+    println!("Patch size SRC only: {}", patch.get_ref().len());
     let f_2953_bytes = trgt.into_inner();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
-    let mut reader = Cursor::new(patch);
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+    patch.rewind()?;
+    smdiff_decoder::apply_patch(&mut patch,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != f_2953_bytes{
         //find the first mismatch
@@ -198,21 +203,22 @@ pub fn encode_test_gcc_2952_2953(config:&EncoderConfig)-> Result<(), Box<dyn std
 
     src.rewind()?;
     let mut trgt = Cursor::new(f_2953_bytes);
-    let mut patch = Vec::new();
+    let mut patch = Cursor::new(Vec::new());
     let start = Instant::now();
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,config)?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
-    println!("Patch size SRC+TRGT: {}", patch.len());
+    println!("Patch size SRC+TRGT: {}", patch.get_ref().len());
     let f_2953_bytes = trgt.into_inner();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
-    let mut reader = Cursor::new(patch);
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+    patch.rewind()?;
+    smdiff_decoder::apply_patch(&mut patch,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != f_2953_bytes{
         //find the first mismatch
@@ -244,7 +250,7 @@ pub fn new_encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> 
     f_2951.read_to_end(&mut f_2951_bytes).unwrap();
     let mut src = Cursor::new(f_2951_bytes);
     let mut trgt = Cursor::new(f_2952_bytes);
-    let mut patch = Vec::new();
+    let mut patch = Cursor::new(Vec::new());
     let start = Instant::now();
     smdiff_encoder::encode(
         &mut src,
@@ -273,16 +279,17 @@ pub fn new_encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> 
         ).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
-    println!("Patch size SRC only: {}", patch.len());
+    println!("Patch size SRC only: {}", patch.get_ref().len());
     let f_2952_bytes = trgt.into_inner();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
-    let mut reader = Cursor::new(patch);
+    patch.rewind()?;
     src.rewind()?;
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+    smdiff_decoder::apply_patch(&mut patch,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
     if decode_sm != f_2952_bytes{
         //find the first mismatch
         let mut i = 0;

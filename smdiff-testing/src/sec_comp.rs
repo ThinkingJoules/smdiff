@@ -44,12 +44,13 @@ pub fn analyze_sec_comp_large_file_worst()-> Result<(), Box<dyn std::error::Erro
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(0)))?;
     let duration = start.elapsed();
     let f_2952_bytes = trgt.into_inner();
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = Cursor::new(&patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration_2 = start.elapsed();
+    let decode_sm = decode_sm.into_inner();
     assert_eq!(decode_sm, f_2952_bytes);
     values.push(("smdiff(trgt) (compress)",(duration,duration_2,patch.len())));
 
@@ -121,12 +122,13 @@ pub fn analyze_sec_comp_large_file_best()-> Result<(), Box<dyn std::error::Error
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(9)))?;
     let duration = start.elapsed();
     let f_2952_bytes = trgt.into_inner();
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = Cursor::new(&patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration_2 = start.elapsed();
+    let decode_sm = decode_sm.into_inner();
     assert_eq!(decode_sm, f_2952_bytes);
     values.push(("smdiff(trgt) (compress)",(duration,duration_2,patch.len())));
 
@@ -201,12 +203,13 @@ fn sec_comp_gcc_2951_2952(config:&EncoderConfig)-> Result<[(Duration,Duration,us
     let size_1 = patch.len();
     let f_2952_bytes = trgt.into_inner();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = Cursor::new(patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration_2 = start.elapsed();
+    let decode_sm = decode_sm.into_inner();
     assert_eq!(decode_sm, f_2952_bytes);
 
     src.rewind()?;
@@ -218,12 +221,13 @@ fn sec_comp_gcc_2951_2952(config:&EncoderConfig)-> Result<[(Duration,Duration,us
     let f_2952_bytes = trgt.into_inner();
     let size_2 = patch.len();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = Cursor::new(patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration_4 = start.elapsed();
+    let decode_sm = decode_sm.into_inner();
     assert_eq!(decode_sm, f_2952_bytes);
 
     Ok([(duration_1,duration_2,size_1),(duration_3,duration_4,size_2)])
@@ -242,12 +246,13 @@ pub fn analyze_sec_comp_sentence_best()-> Result<(), Box<dyn std::error::Error>>
     smdiff_encoder::encode(&mut src, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(9)))?;
     let duration = start.elapsed();
     let trgt_bytes = trgt.into_inner();
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = Cursor::new(&patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration_2 = start.elapsed();
+    let decode_sm = decode_sm.into_inner();
     assert_eq!(decode_sm, trgt_bytes);
     values.push(("smdiff(trgt) (compress)",(duration,duration_2,patch.len())));
 
@@ -317,11 +322,12 @@ fn sec_comp_sentence(config:&EncoderConfig)-> Result<[(Duration,Duration,usize);
     let size_1 = patch.len();
     let trgt_bytes = trgt.into_inner();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     let mut reader = Cursor::new(patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration_2 = start.elapsed();
+    let decode_sm = decode_sm.into_inner();
     assert_eq!(decode_sm, trgt_bytes);
 
     src.rewind()?;
@@ -333,12 +339,13 @@ fn sec_comp_sentence(config:&EncoderConfig)-> Result<[(Duration,Duration,usize);
     let trgt_bytes = trgt.into_inner();
     let size_2 = patch.len();
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     src.rewind()?;
     let mut reader = Cursor::new(patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration_4 = start.elapsed();
+    let decode_sm = decode_sm.into_inner();
     assert_eq!(decode_sm, trgt_bytes);
 
     Ok([(duration_1,duration_2,size_1),(duration_3,duration_4,size_2)])

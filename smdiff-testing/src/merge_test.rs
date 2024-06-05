@@ -50,13 +50,14 @@ pub fn merge_2951_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     println!("Summary Patch size: {}", summary_patch.len());
     println!("Merge Throughput: {} MB/s", (summary_patch.len() as f64 / duration.as_secs_f64()) / 1_000_000.0);
 
-    let mut decode_sm = Vec::new();
+    let mut decode_sm = Cursor::new(Vec::new());
     let start = Instant::now();
     let mut src = Cursor::new(f_2951_bytes);
     let mut reader = Cursor::new(summary_patch);
     smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in apply_patch() is: {:?}", duration);
+    let decode_sm = decode_sm.into_inner();
 
     if decode_sm != f_2953_bytes{
         //find the first mismatch
