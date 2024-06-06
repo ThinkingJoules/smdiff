@@ -1,7 +1,7 @@
 //! This lib is used to *construct* valid SMDIFF format delta files.
 //! This is *not* an encoder.
 //! However, if you did write an encoder this would help you write the ops to a file.
-use smdiff_common::{diff_addresses_to_i64, size_routine, write_i_varint, write_u16, write_u8, write_u_varint, AddOp, Copy, CopySrc, Format, Op, SectionHeader, Size, MAX_WIN_SIZE, SECTION_COMPRESSION_RSHIFT, SECTION_CONTINUE_BIT, SECTION_FORMAT_BIT, SIZE_MASK};
+use smdiff_common::{diff_addresses_to_i64, size_routine, write_i_varint, write_u16, write_u8, write_u_varint, AddOp, Copy, CopySrc, Format, Op, SectionHeader, Size, MAX_INST_SIZE, MAX_WIN_SIZE, SECTION_COMPRESSION_RSHIFT, SECTION_CONTINUE_BIT, SECTION_FORMAT_BIT, SIZE_MASK};
 
 
 /// Used to write the header to the section.
@@ -116,6 +116,38 @@ fn write_op_addtl<W: std::io::Write,A:AddOp>(writer: &mut W, op: &Op<A>, cur_d_a
         }
     }
     Ok(())
+}
+
+/// This takes a large list of ops and divides them into sections that are no larger than `max_section_size`
+/// * `ops` - The list of ops to divide into sections.
+/// * `max_section_size` - The maximum size of each section in output bytes.
+/// * Returns a vector of tuples containing the ops for each section and the header for that section.
+pub fn make_sections<A:AddOp>(ops: &[Op<A>], max_section_size: usize) -> Vec<(&[Op<A>],SectionHeader)> {
+    let max_win_size = max_section_size.clamp(MAX_INST_SIZE, MAX_WIN_SIZE) as u32;
+    let mut result = Vec::new();
+    let mut output_size = 0;
+    let mut num_add_bytes = 0;
+    let mut start_index = 0;
+
+    for (end_index, op) in ops.iter().enumerate() {
+        // Check if adding the current op exceeds the window size
+        let op_size = op.oal() as u32;
+        if output_size + op_size > max_win_size {
+            result.push((&ops[start_index..end_index],SectionHeader{ num_operations: (end_index-start_index) as u32, num_add_bytes, output_size, compression_algo: 0, format: Format::Interleaved, more_sections: true }));
+            start_index = end_index;
+            output_size = 0;
+            num_add_bytes = 0;
+        }
+        if op.is_add() {
+            num_add_bytes += op_size;
+        }
+        output_size += op_size;
+    }
+
+    // Add the last group
+    result.push((&ops[start_index..],SectionHeader{ num_operations: (ops.len()-start_index) as u32, num_add_bytes, output_size, compression_algo: 0, format: Format::Interleaved, more_sections: false }));
+
+    result
 }
 
 #[cfg(test)]
