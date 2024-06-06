@@ -188,7 +188,7 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
                 //we setup for trying to start a new match
                 run_len = find_initial_run_len(&trgt[cur_o_pos..], min_match_value, &mut run_byte);
                 if let Some(matcher) = src_matcher.as_mut(){
-                    matcher.center_on(cur_o_pos);
+                    matcher.add_start_positions_to_matcher(cur_o_pos);
                     large_hasher.as_mut().map(|h|h.seek(cur_o_pos));
                 };
                 if let Some(matcher) = trgt_matcher.as_mut(){
@@ -221,7 +221,7 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
 
                 if let Some(hasher) = large_hasher.as_mut(){
                     if cur_o_pos + hasher.win_size() <= max_trgt_match_len{
-                        let matcher = src_matcher.as_ref().unwrap();
+                        let matcher = src_matcher.as_mut().unwrap();
                         debug_assert!(hasher.peek_next_pos() == cur_o_pos, "lh.pos {} != cur o {}",hasher.peek_next_pos(),cur_o_pos);
                         if let Some((src_start,pre_match,post_match)) = matcher.find_best_src_match(src, trgt, cur_o_pos, hasher.peek_next_hash()) {
                             let length = pre_match + post_match;

@@ -34,7 +34,7 @@ impl<'a> LargeHashCursor<'a> {
                 cursor.win_size()
             }
             LargeHashCursor::Rolling(cursor) => {
-                cursor.rolling_hash.win_len
+                cursor.rolling_hash.win_len as usize
             }
         }
 
@@ -49,6 +49,17 @@ impl<'a> HasherCusor for LargeHashCursor<'a> {
             }
             LargeHashCursor::Rolling(cursor) => {
                 cursor.next()
+            }
+        }
+    }
+
+    fn prev(&mut self) -> Option<(usize, usize)> {
+        match self {
+            LargeHashCursor::Direct(cursor) => {
+                cursor.prev()
+            }
+            LargeHashCursor::Rolling(cursor) => {
+                cursor.prev()
             }
         }
     }
@@ -88,6 +99,8 @@ impl<'a> HasherCusor for LargeHashCursor<'a> {
 pub trait HasherCusor{
     /// Returns the (next hash, position in the slice).
     fn next(&mut self) -> Option<(usize, usize)>;
+    /// Returns the (prev hash, position in the slice).
+    fn prev(&mut self) -> Option<(usize, usize)>;
     /// Seeks to a specific position in the slice and returns the hash (or None if the position is invalid)
     fn seek(&mut self, pos: usize) -> Option<usize>;
     /// Current position in the slice
@@ -98,11 +111,13 @@ pub trait HasherCusor{
 
 const HASH_MULTIPLIER_32_BIT: u32 = 1597334677;
 const HASH_MULTIPLIER_64_BIT: u64 = 1181783497276652981;
+const MOD_INV_64_BIT: u64 = 13515856136758413469;
+const MOD_INV_32_BIT: u32 = 851723965;
 #[derive(Clone, Debug)]
 pub(crate) struct RollingHashConfig {
     hash_window_len: usize,     // Size of the data window for hash calculations
-    multiplicative_factor: usize, // Precomputed factor for hash updates
-    precomputed_powers: Vec<usize>, // Precomputed powers of the multiplier
+    first_byte_multiplicative_weight: usize, // Precomputed factor for hash updates
+    fwd_powers: Vec<usize>, // Precomputed powers of the multiplier
 }
 
 impl RollingHashConfig {
@@ -114,39 +129,54 @@ impl RollingHashConfig {
             HASH_MULTIPLIER_32_BIT as usize
         };
 
-        let mut precomputed_powers = vec![1usize; hash_window_len];
-        for i in (0..hash_window_len - 1).rev() {
-            precomputed_powers[i] = precomputed_powers[i + 1].wrapping_mul(hash_multiplier);
-        }
 
+        let mut fwd_powers = vec![1usize; hash_window_len];
+        for i in (0..hash_window_len-1).rev() {
+            fwd_powers[i] = fwd_powers[i + 1].wrapping_mul(hash_multiplier);
+        }
         Self {
             hash_window_len,
-            multiplicative_factor: precomputed_powers[0].wrapping_mul(hash_multiplier),
-            precomputed_powers,
+            first_byte_multiplicative_weight: fwd_powers[0].wrapping_mul(hash_multiplier),
+            fwd_powers,
         }
     }
     #[inline(always)]
     pub(crate) fn calculate_large_checksum(&self, data: &[u8]) -> usize {
         assert_eq!(data.len(), self.hash_window_len);
         data.iter()
-            .zip(self.precomputed_powers.iter())
+            .zip(self.fwd_powers.iter())
             .fold(0, |acc, (byte, power)|{
                 acc.wrapping_add(power.wrapping_mul(*byte as usize))
-                //acc.wrapping_mul(*power).wrapping_add(*byte as usize)
             })
     }
 
     #[inline(always)]
     #[cfg(target_pointer_width = "64")]
-    pub(crate) fn update_large_checksum(&self, checksum: usize, old:u8, new:u8) -> usize {
-        (HASH_MULTIPLIER_64_BIT as usize).wrapping_mul(checksum)
-        .wrapping_sub(self.multiplicative_factor.wrapping_mul(old as usize))
+    pub(crate) fn update_large_checksum_fwd(&self, checksum: usize, old:u8, new:u8) -> usize {
+        (HASH_MULTIPLIER_64_BIT as usize).wrapping_mul(checksum)//multiply to 'shift values' left
+        .wrapping_sub(self.first_byte_multiplicative_weight.wrapping_mul(old as usize))
         .wrapping_add(new as usize)
     }
 
     #[inline(always)]
+    #[cfg(target_pointer_width = "64")]
+    pub(crate) fn update_large_checksum_bwd(&self, checksum: usize, old:u8, new:u8) -> usize {
+        checksum.wrapping_sub(old as usize)
+        .wrapping_add(self.first_byte_multiplicative_weight.wrapping_mul(new as usize))
+        .wrapping_mul(MOD_INV_64_BIT as usize)
+    }
+
+    #[inline(always)]
     #[cfg(target_pointer_width = "32")]
-    pub(crate) fn update_large_checksum(&self, checksum: usize, old:u8, new:u8) -> usize{
+    pub(crate) fn update_large_checksum_bwd(&self, checksum: usize, old:u8, new:u8) -> usize {
+        checksum.wrapping_sub(old as usize)
+        .wrapping_add(self.first_byte_multiplicative_weight.wrapping_mul(new as usize))
+        .wrapping_mul(MOD_INV_32_BIT as usize)
+    }
+
+    #[inline(always)]
+    #[cfg(target_pointer_width = "32")]
+    pub(crate) fn update_large_checksum_fwd(&self, checksum: usize, old:u8, new:u8) -> usize{
         (HASH_MULTIPLIER_32_BIT as usize).wrapping_mul(checksum)
         .wrapping_sub(self.multiplicative_factor.wrapping_mul(old as usize))
         .wrapping_add(new as usize)
@@ -159,7 +189,7 @@ pub(crate) struct RollingHasher {
     config: RollingHashConfig,
     hash: usize,
     win: [u8; 9],
-    mod_pos: usize,
+    win_pos: ModuloUsize,
     win_len: usize,
 }
 
@@ -175,23 +205,32 @@ impl RollingHasher {
             config: config.clone(),
             hash,
             win,
-            mod_pos: 0,
-            win_len,
+            win_pos: ModuloUsize::new(win_len),
+            win_len: win_len,
         }
     }
 
     fn jump(&mut self, new_win: &[u8]) {
-        assert_eq!(new_win.len(), self.win_len);
+        assert_eq!(new_win.len(), self.win_len as usize);
         self.hash = self.config.calculate_large_checksum(new_win);
-        (&mut self.win[..self.win_len]).copy_from_slice(&new_win[..self.win_len]);
-        self.mod_pos = 0;
+        (&mut self.win[..self.win_len as usize]).copy_from_slice(&new_win[..self.win_len as usize]);
+        self.win_pos.value = 0;
     }
-
-    pub(crate) fn update(&mut self, new_char: u8) {
-        let old_char = self.win[self.mod_pos];
-        self.hash = self.config.update_large_checksum(self.hash, old_char, new_char);
-        self.win[self.mod_pos] = new_char;
-        self.mod_pos = (self.mod_pos + 1) % self.win_len;
+    #[inline(always)]
+    pub(crate) fn update_fwd(&mut self, new_char: u8) {
+        let buf_pos = self.win_pos.get();
+        let old_char = self.win[buf_pos];
+        self.hash = self.config.update_large_checksum_fwd(self.hash, old_char, new_char);
+        self.win[buf_pos] = new_char;
+        self.win_pos.increment();
+    }
+    #[inline(always)]
+    pub(crate) fn update_bwd(&mut self, new_char: u8) {
+        let buf_pos = self.win_pos.get_last();
+        let old_char = self.win[buf_pos];
+        self.hash = self.config.update_large_checksum_bwd(self.hash, old_char, new_char);
+        self.win[buf_pos] = new_char;
+        self.win_pos.decrement();
     }
 
     pub(crate) fn hash(&self) -> usize {
@@ -199,7 +238,36 @@ impl RollingHasher {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+struct ModuloUsize {
+    value: usize,
+    modulo: usize,
+}
 
+impl ModuloUsize {
+    fn new(modulo: usize) -> Self {
+        Self { value: 0, modulo }
+    }
+
+    fn get(&self) -> usize {
+        self.value
+    }
+    fn get_last(&self) -> usize {
+        if self.value == 0 {
+            self.modulo - 1
+        } else {
+            self.value - 1
+        }
+    }
+
+    fn increment(&mut self) {
+        self.value = (self.value + 1) % self.modulo;
+    }
+
+    fn decrement(&mut self) {
+        self.value = (self.value + self.modulo - 1) % self.modulo; // Handle underflow
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct RollingHashCursor<'a> {
@@ -218,33 +286,55 @@ impl<'a> RollingHashCursor<'a>{
     }
 }
 impl<'a> HasherCusor for RollingHashCursor<'a> {
+    #[inline(always)]
     fn next(&mut self) -> Option<(usize, usize)> {
-        let end_pos = self.rolling_hash_start_pos + self.rolling_hash.win_len;
+        let win_len = self.rolling_hash.win_len as usize;
+        let end_pos = self.rolling_hash_start_pos + win_len;
         if end_pos > self.slice.len() {
             return None;
         }
         let hash = self.rolling_hash.hash();
         let start_pos = self.rolling_hash_start_pos;
         if end_pos < self.slice.len() {
-            self.rolling_hash.update(self.slice[end_pos]);
+            self.rolling_hash.update_fwd(self.slice[end_pos]);
         }
         self.rolling_hash_start_pos += 1;
         Some((hash, start_pos))
     }
+    #[inline(always)]
+    fn prev(&mut self) -> Option<(usize, usize)> {
+        if self.rolling_hash_start_pos == 0 {
+            return None;
+        }
+
+        self.rolling_hash_start_pos -= 1;
+        self.rolling_hash.update_bwd(self.slice[self.rolling_hash_start_pos]);
+        let hash = self.rolling_hash.hash();
+        Some((hash, self.rolling_hash_start_pos))
+    }
     fn seek(&mut self, pos: usize)-> Option<usize> {
+        //dbg!(pos,self.rolling_hash_start_pos,self.rolling_hash.win);
         if pos == self.rolling_hash_start_pos{
             return Some(self.rolling_hash.hash());
         }
-        let end_pos = pos + self.rolling_hash.win_len;
+        let win_len = self.rolling_hash.win_len as usize;
+        let end_pos = pos + win_len;
         if end_pos > self.slice.len() {
             return None;
         }
-        let prev_end = self.rolling_hash_start_pos + self.rolling_hash.win_len;
+        let prev_end = self.rolling_hash_start_pos + win_len;
         //if self.start_pos..self.start_pos + self.rolling_hash.win_len.contains(&pos) we should just call next the right amount of times
-        if (self.rolling_hash_start_pos..prev_end).contains(&pos) && pos > self.rolling_hash_start_pos{
+        if (self.rolling_hash_start_pos..prev_end).contains(&pos){
             let diff = pos - self.rolling_hash_start_pos;
             for _ in 0..diff{
                 self.next();
+            }
+            debug_assert_eq!(self.rolling_hash_start_pos,pos);
+            return Some(self.rolling_hash.hash());
+        }else if (self.rolling_hash_start_pos.saturating_sub(win_len)..self.rolling_hash_start_pos).contains(&pos){
+            let diff = self.rolling_hash_start_pos - pos;
+            for _ in 0..diff{
+                self.prev();
             }
             debug_assert_eq!(self.rolling_hash_start_pos,pos);
             return Some(self.rolling_hash.hash());
@@ -316,6 +406,15 @@ impl HasherCusor for SmallHashCursor<'_> {
         Some((hash, start_pos))
     }
     #[inline(always)]
+    fn prev(&mut self) -> Option<(usize, usize)> {
+        if self.rolling_hash_start_pos == 0 {
+            return None;
+        }
+        self.rolling_hash_start_pos -= 1;
+        self.cur_hash = self.calc_checksum(self.rolling_hash_start_pos);
+        Some((self.cur_hash, self.rolling_hash_start_pos))
+    }
+    #[inline(always)]
     fn seek(&mut self, pos: usize) -> Option<usize> {
         if pos == self.rolling_hash_start_pos {
             return Some(self.cur_hash);
@@ -353,7 +452,7 @@ mod test_super {
     }
 
     #[test]
-    fn test_rolling_hash() {
+    fn test_rolling_hash_fwd() {
         let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
         let config = RollingHashConfig::new(8);
         let mut mh = RollingHasher::new(&initial_data[..8],&config);
@@ -366,11 +465,38 @@ mod test_super {
             let old_char = initial_data[i - 1];
             let new_char = initial_data[i + 7];
             let expected_hash = config.calculate_large_checksum(&initial_data[i..i+8]);
-            hash = config.update_large_checksum(hash, old_char, new_char);
+            hash = config.update_large_checksum_fwd(hash, old_char, new_char);
             assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
-            mh.update(new_char);
+            mh.update_fwd(new_char);
             assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
             let (hash2,pos) = crsr.next().unwrap();
+            assert_eq!(pos,i, "HashCrsr wrong output position");
+            assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
+        }
+    }
+
+    #[test]
+    fn test_rolling_hash_bwd() {
+        let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
+        let config = RollingHashConfig::new(8);
+        let start_i = (initial_data.len() - 20)-8;
+        let init = &initial_data[start_i..start_i+8];
+        let mut mh = RollingHasher::new(init,&config);
+        let mut crsr = RollingHashCursor::new(initial_data,8,&config);
+        // Simulate a rolling window
+        let mut hash = config.calculate_large_checksum(init);
+        let crsr_hash = crsr.seek(start_i).unwrap();
+        assert_eq!(crsr_hash, hash);
+        for i in (0..start_i).rev() {
+            let hash_win = &initial_data[i..i+8];
+            let new_char = initial_data[i];
+            let old_char = initial_data[i + 8];
+            let expected_hash = config.calculate_large_checksum(hash_win);
+            hash = config.update_large_checksum_bwd(hash, old_char, new_char);
+            assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
+            mh.update_bwd(new_char);
+            assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
+            let (hash2,pos) = crsr.prev().unwrap();
             assert_eq!(pos,i, "HashCrsr wrong output position");
             assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
         }
@@ -388,6 +514,7 @@ mod test_super {
         }
         answers.sort_by(|a,b|a.0.cmp(&b.0));
         for (hash,pos) in answers{
+            dbg!(hash,pos);
             let new_hash = cursor.seek(pos).unwrap();
             assert_eq!(hash,new_hash);
         }

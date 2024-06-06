@@ -15,58 +15,89 @@ struct InnerConfig{
 pub(crate) struct SrcMatcher<'a>{
     pub(crate) l_step:usize,
     pub(crate) hash_win_len: usize,
+    chain_check: usize,
+    hasher: LargeHashCursor<'a>,
+    table: BasicHashTable,
+    chain: ChainList,
+    //Window calc state
     src_len:usize,
     trgt_len:usize,
     half_win_size:usize,
     max_end_pos:usize,
-    chain_check: usize,
-    hasher: LargeHashCursor<'a>,
-    table: BasicHashTable,
-    chain: ChainList
+    cur_window_end:usize,
+    next_hash_pos:usize,
+    max_match_pos:usize,
 }
 
 impl<'a> SrcMatcher<'a> {
     pub(crate) fn hash_win_len(&self)->usize{
         self.hash_win_len
     }
-    pub(crate) fn advance_and_store(&mut self) {
-        let start_pos = self.hasher.peek_next_pos();
-        //if start_pos >= self.hasher.data_len() - self.hash_win_len{return}
-        debug_assert!(start_pos % self.l_step == 0, "start_pos({}) must be divisible by l_step({})",start_pos,self.l_step);
-        let end_pos = start_pos + self.l_step;
-        //dbg!(start_pos,end_pos);
-        if self.l_step >= self.hash_win_len{
-            self.seek(end_pos)
-        }else if start_pos + self.l_step < self.hasher.data_len(){
-            for _ in 0..self.l_step{
-                self.hasher.next();
-            }
-            debug_assert!(end_pos == self.hasher.peek_next_pos());
-            self.store(self.hasher.peek_next_hash(),self.hasher.peek_next_pos());
-        }
-    }
+    // pub(crate) fn advance_and_store(&mut self) {
+    //     let start_pos = self.hasher.peek_next_pos();
+    //     //if start_pos >= self.hasher.data_len() - self.hash_win_len{return}
+    //     debug_assert!(start_pos % self.l_step == 0, "start_pos({}) must be divisible by l_step({})",start_pos,self.l_step);
+    //     let end_pos = start_pos + self.l_step;
+    //     //dbg!(start_pos,end_pos);
+    //     if self.l_step >= self.hash_win_len{
+    //         self.seek(end_pos)
+    //     }else if start_pos + self.l_step < self.hasher.data_len(){
+    //         for _ in 0..self.l_step{
+    //             self.hasher.next();
+    //         }
+    //         debug_assert!(end_pos == self.hasher.peek_next_pos());
+    //         self.store(self.hasher.peek_next_hash(),self.hasher.peek_next_pos());
+    //     }
+    // }
     pub(crate) fn seek(&mut self, pos:usize){
-        debug_assert!(self.hasher.peek_next_pos() <= pos, "self.hasher.peek_next_pos({}) > pos({})",self.hasher.peek_next_pos(),pos);
-        let aligned_pos = self.align_pos(pos);
-        if let Some(hash) = self.hasher.seek(aligned_pos) {
-            self.store(hash,aligned_pos)
+        //debug_assert!(self.hasher.peek_next_pos() <= pos, "self.hasher.peek_next_pos({}) > pos({})",self.hasher.peek_next_pos(),pos);
+        debug_assert!(pos % self.l_step == 0, "pos({}) must be divisible by l_step({})",pos,self.l_step);
+        //let aligned_pos = self.align_pos(pos);
+        if let Some(hash) = self.hasher.seek(pos) {
+            self.store(hash,pos)
         }
     }
-    //This is called on every byte, to incrementally roll the src_win and stored hashes forward.
-    pub(crate) fn center_on(&mut self, cur_o_pos:usize){
-        if let Some((seek_pos, diff_steps)) = calculate_window_advancement(
-            cur_o_pos, self.src_len, self.trgt_len, self.half_win_size, self.max_end_pos, self.hasher.peek_next_pos(), self.l_step, self.hasher.peek_next_pos()
-        ) {
-            if diff_steps > 1 {
-                self.seek(seek_pos);
+    // pub(crate) fn center_on(&mut self, cur_o_pos:usize){
+    //     if let Some((seek_pos, diff_steps)) = calculate_window_advancement(
+    //         cur_o_pos, self.src_len, self.trgt_len, self.half_win_size, self.max_end_pos, self.hasher.peek_next_pos(), self.l_step, self.hasher.peek_next_pos()
+    //     ) {
+    //         if diff_steps > 1 {
+    //             self.seek(seek_pos);
+    //         }
+    //         for _ in 0..diff_steps {
+    //             self.advance_and_store();
+    //         }
+    //     }
+    // }
+    pub(crate) fn add_start_positions_to_matcher(&mut self, cur_o_pos: usize){
+        if cur_o_pos < self.next_hash_pos{
+            return;
+        }
+        dbg!(self.cur_window_end,self.next_hash_pos,self.max_match_pos,cur_o_pos);
+        if let Some(range) = calculate_window_range(cur_o_pos, self.src_len, self.trgt_len, self.half_win_size, self.max_end_pos, self.cur_window_end, self.l_step,self.max_match_pos) {
+            dbg!(&range);
+            //Put the new positions in, in reverse order
+            //Reverse, because later positions are less likely to be used.
+            //The hash table only keeps the last hash for a given hash
+            //So hash/pos nearest our current position we want to ensure we keep.
+            //By going in reverse, any collisions/duplicate starts will be evicting matches later in the src file.
+            //The idea is that similar files will have similar offsets.
+            //Very different files will always suffer from poor alignment and missing matches.
+            //That is why it is best to use TrgtMatcher as well as secondary compression and not rely on the SrcMatcher alone.
+            debug_assert!(range.start % self.l_step == 0, "range.start({}) must be divisible by l_step({})",range.start,self.l_step);
+            //we will call this fn again after we are a 1/4 of the way through our window size
+            if range.end >= self.max_end_pos{
+                self.next_hash_pos = usize::MAX;
+            }else{
+                self.next_hash_pos = cur_o_pos + (self.half_win_size >> 1);
             }
-            for _ in 0..diff_steps {
-                self.advance_and_store();
+            for pos in range.step_by(self.l_step).rev() {
+                self.seek(pos);
             }
         }
     }
     ///Returns (src_pos, pre_match, post_match) post_match *includes* the hash_win_len.
-    pub fn find_best_src_match(&self,src:&[u8],trgt:&[u8],cur_o_pos:usize,hash:usize)->Option<(usize,usize,usize)>{
+    pub fn find_best_src_match(&mut self,src:&[u8],trgt:&[u8],cur_o_pos:usize,hash:usize)->Option<(usize,usize,usize)>{
         let table_pos = self.table.get(hash)?;
         let mut iter = std::iter::once(table_pos).chain(self.chain.iter_prev_starts(table_pos, self.hasher.peek_next_pos(),hash));
         let mut chain = self.chain_check;
@@ -86,6 +117,9 @@ impl<'a> SrcMatcher<'a> {
                     if total_post_match+pre_match > best_len{
                         best_len = total_post_match+pre_match;
                         best = Some((src_pos,pre_match,total_post_match));
+                        if cur_o_pos + total_post_match > self.max_match_pos{
+                            self.max_match_pos = cur_o_pos + total_post_match;
+                        }
                     }
                     chain -= 1;
                 }else{
@@ -131,8 +165,9 @@ impl<'a> SrcMatcher<'a> {
     }
 }
 
-const DEFAULT_SRC_WIN_SIZE: usize = 1 << 26;
+const DEFAULT_SRC_WIN_SIZE: usize = 1 << 25;
 const MIN_SRC_WIN_SIZE: usize = 1 << 20;
+const HASH_CHUNK_SIZE: usize = 1 << 23;
 //const DEFAULT_PREV_SIZE: usize = 1 << 18;
 
 ///Configuration for the SrcMatcher.
@@ -239,10 +274,13 @@ impl SrcMatcherConfig {
             hash_win_len,
             chain_check,
             half_win_size: src_win_size>>1,
+            cur_window_end: 0,
+            next_hash_pos: 0,
+            max_match_pos: trgt_start_pos,
             chain: ChainList::new(prev_cap),
         };
         //prefill with hash start positions.
-        matcher.center_on(trgt_start_pos);
+        matcher.add_start_positions_to_matcher(trgt_start_pos);
         matcher
     }
 }
@@ -383,9 +421,88 @@ fn calculate_window_advancement(
     Some((seek_pos, diff / l_step))
 }
 
+#[inline(always)]
+fn calculate_window_range(
+    cur_o_pos: usize,
+    src_len: usize,
+    trgt_len: usize,
+    half_win_size: usize,
+    max_end_pos: usize,
+    cur_window_end: usize,
+    l_step: usize,
+    max_match_end:usize,
+) -> Option<std::ops::Range<usize>> {
+    //min and max cases
+    if cur_o_pos < half_win_size {
+        return Some(0..(half_win_size<<1).min(max_end_pos));
+    }else if cur_window_end >= max_end_pos{
+        return None;
+    }
+    //else we are going to slide the window based on the current output position
+
+    //First find the scaled mid point, or the 'equivalent position in the src file'
+    //We use this as our 'input position' to calculate the window position.
+    //Note on `.min(max_match_end)`:
+    // If our longest match has exceeded even this scaled position, use that instead.
+    // We do not store already matched start positions.
+    // That is, we our greedy at moving the src matcher fwd.
+    let scaled_src_pos = cur_o_pos * src_len / trgt_len;
+
+    //We add our half window to the equivalent position.
+    let scaled_end = align((scaled_src_pos + half_win_size).min(max_end_pos),l_step);
+    if scaled_end <= cur_window_end || scaled_end <= max_match_end {//nothing more to hash yet
+        //this will be encountered often when the trgt file is (significantly) larger than the src file.
+        return None;
+    }
+    //The max amt we logically could hash
+    //We need this in case we move an entire window size forward.
+    //We re-center our window based on the scaled src position.
+    let max_diff_start = scaled_end.saturating_sub(half_win_size<<1);
+    let scaled_start = align(cur_window_end.max(max_match_end).max(max_diff_start),l_step);
+    Some(scaled_start..scaled_end)
+}
+
 #[cfg(test)]
 mod test_super {
     use super::*;
+
+    #[test]
+    fn test_calculate_window_range_lrg_trgt() {
+        let half_win_size = 256;
+        let l_step = 2;
+        let src_len = 1000;
+        let trgt_len = 2000;
+        let max_end_pos = 994;
+
+        // Initial fast forward
+        let result = calculate_window_range(10, src_len, trgt_len, half_win_size, max_end_pos, 0, l_step, 0);
+        assert_eq!(result.unwrap(), 0..512, "Initial fast forward: Incorrect range");
+
+        let result = calculate_window_range(10, src_len, trgt_len, 512, max_end_pos, 0, l_step, 0);
+        assert!(result.is_some(), "Initial fast forward: Expected Some(0..1024), but got {:?}", result);
+        assert_eq!(result.unwrap(), 0..max_end_pos, "Initial fast forward: Incorrect range");
+
+        // End of file
+        let result = calculate_window_range(900, src_len, trgt_len, half_win_size, max_end_pos, 1000, l_step, 0);
+        assert!(result.is_none(), "End of file: Expected None, but got {:?}", result);
+
+        // Nothing more to hash
+        let result = calculate_window_range(500, src_len, trgt_len, half_win_size, max_end_pos, 700, l_step, 0);
+        assert!(result.is_none(), "Nothing to hash: Expected None, but got {:?}", result);
+
+        // Normal advancement
+        let result = calculate_window_range(1250, src_len, trgt_len, half_win_size, max_end_pos, 512, l_step, 0);
+        assert_eq!(result.unwrap(), 512..880, "Normal advancement: Incorrect range");
+
+        // Scaled end too far
+        let result = calculate_window_range(400, src_len, trgt_len, half_win_size, max_end_pos, 300, l_step, 1000);
+        assert!(result.is_none(), "Scaled end too far: Expected None, but got {:?}", result);
+
+        // Match is ahead of position
+        let result = calculate_window_range(400, src_len, trgt_len, half_win_size, max_end_pos, 300, l_step, 700);
+        assert!(result.is_none(), "Max Match Exceeds Position: Expected None, but got {:?}", result);
+    }
+
 
     #[test]
     fn test_window_advancement_lrg_src() {

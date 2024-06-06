@@ -83,6 +83,19 @@ impl BasicHashTable {
         let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
         self.buckets[idx].set(hash, position)
     }
+    /// Inserts a new position into the hash table conditional on if the old position is old enough.
+    /// * hash: The hash of the key
+    /// * position: The new position to insert
+    /// * old_lt: Will only insert if the to-be-evicted position is less than this value. (always inserts if unset)
+    #[inline(always)]
+    pub(crate) fn insert_cond(&mut self, hash: usize, position: usize,old_lt:usize) -> Result<Option<usize>,(usize,usize)> {
+        let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
+        let bucket = &mut self.buckets[idx];
+        if bucket.value == 0 || bucket.value > 0 && bucket.value - BUCKET_VALUE_OFFSET < old_lt {
+            return bucket.set(hash, position)
+        }
+        Err((hash,position)) //could not set
+    }
 
 }
 
