@@ -114,15 +114,24 @@ impl<'a> TrgtMatcher<'a> {
 
 const DEFAULT_TRGT_WIN_SIZE: usize = 1 << 23;
 const DEFAULT_PREV_SIZE: usize = 1 << 18;
+///Configuration for the TrgtMatcher.
 #[derive(Debug, Clone)]
 pub struct TrgtMatcherConfig{
-    /// If the small match (in trgt) is >= than this we stop searching for better matches and emit this one.
+    /// If the small match (in trgt) is >= than this we stop searching the chain for better matches and use this one.
     pub compress_early_exit:usize,
     /// Max number of entries to check in the chain during matching.
     /// Larger value means more accurate matches but slower.
+    /// `compress_early_exit` stops checking the chain,
+    /// this value is the fallback in case the chain is long, and has no good matches.
     pub chain_check: usize,
-    ///Advanced setting, leave as None for default.
+    /// How many historical hashes to store if we find multiple start points for a given hash.
+    /// This memory is shared across all hashes. Leave blank for dynamic calculation.
     pub prev_table_capacity: Option<usize>,
+    /// The length of the hash to use for the source data.
+    /// Shorter hashes do not always make better matches.
+    /// They usually will match decent matches, but will effectively 'chop up' better matches.
+    /// Smaller hashes are faster to perform.
+    /// Since matching the trgt is like compression, the valid values are 3 or 4.
     pub hash_win_len: Option<usize>,
 }
 

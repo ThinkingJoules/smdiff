@@ -1,12 +1,13 @@
 
-use std::{io::Write, ops::{Range, RangeInclusive}};
+use std::ops::{Range, RangeInclusive};
 
 use encoder::{GenericEncoderConfig, LargerTrgtNaiveTests};
 use op_maker::translate_inner_ops;
-use smdiff_common::{AddOp, Copy, CopySrc, Format, Run, SectionHeader, MAX_INST_SIZE, MAX_WIN_SIZE};
-use smdiff_writer::{write_section_header, write_ops};
+use smdiff_common::{AddOp, Copy, CopySrc, Format, Run, MAX_INST_SIZE, MAX_WIN_SIZE};
+use smdiff_writer::make_sections;
 pub use src_matcher::SrcMatcherConfig;
 pub use trgt_matcher::TrgtMatcherConfig;
+use writer::section_writer;
 
 
 
@@ -16,16 +17,21 @@ mod trgt_matcher;
 mod src_matcher;
 mod op_maker;
 mod encoder;
+pub mod writer;
 
 pub mod zstd{
+//! This module is a re-export of the zstd encoder used in the secondary compression.
     pub use zstd::stream::Encoder;
 }
 pub mod brotli {
+//! This module is a re-export of the brotli encoder used in the secondary compression.
+//! It also exports the config options.
     pub use brotlic::{encode::{BrotliEncoderOptions,CompressorWriter},BlockSize,CompressionMode,Quality,WindowSize};
 }
 
+/// The Add operation for the encoder.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Add <'a> {
+struct Add <'a> {
     bytes: &'a [u8],
 }
 impl AddOp for Add<'_> {
@@ -33,8 +39,11 @@ impl AddOp for Add<'_> {
         &self.bytes
     }
 }
-pub type Op<'a> = smdiff_common::Op<Add<'a>>;
 
+type Op<'a> = smdiff_common::Op<Add<'a>>;
+
+/// The secondary compression algorithm to use.
+/// Default Value: Zstd { level: 3 }
 #[derive(Clone, Debug)]
 pub enum SecondaryCompression {
     /// Default Value: TrgtMatcherConfig::new_from_compression_level(3)
@@ -58,6 +67,7 @@ impl SecondaryCompression {
     pub fn new_brotli_default() -> Self {
         SecondaryCompression::Brotli { options: ::brotlic::BrotliEncoderOptions::default() }
     }
+    /// Returns the value to use in the header. Per the spec.
     pub fn algo_value(&self) -> u8 {
         match self {
             SecondaryCompression::Smdiff { .. } => 1,
@@ -73,11 +83,15 @@ impl Default for SecondaryCompression {
 }
 
 /// Configuration for the encoder.
+///
 /// Default values are:
 /// - match_src: Some(SrcMatcherConfig::new_from_compression_level(3))
 /// - match_target: None
 /// - sec_comp: None
 /// - format: Interleaved
+/// - output_segment_size: MAX_WIN_SIZE
+/// - naive_tests: None
+/// - lazy_escape_len: Some(45)
 #[derive(Clone, Debug)]
 pub struct EncoderConfig {
     /// Do we consider the src file as a dictionary to find matches?
@@ -155,16 +169,24 @@ impl EncoderConfig {
         self.lazy_escape_len = Some(len);
         self
     }
+    /// Use the short hand compression level.
+    /// If match_trgt is true, the same compression level will be used to set the TrgtMatcherConfig.
+    /// If secondary compression is Some(_), the format will be Segregated, else Interleaved.
     pub fn comp_level(level: usize,match_trgt:bool,sec_comp:Option<SecondaryCompression>) -> Self {
         let match_trgt = if match_trgt {
             Some(TrgtMatcherConfig::comp_level(level))
         }else{
             None
         };
+        let format = if sec_comp.is_some() {
+            Format::Segregated
+        }else{
+            Format::Interleaved
+        };
         Self {
             match_src: Some(SrcMatcherConfig::comp_level(level)),
             output_segment_size: MAX_WIN_SIZE,
-            format: Format::Interleaved,
+            format,
             match_trgt,
             sec_comp,
             naive_tests: None,
@@ -185,10 +207,20 @@ impl Default for EncoderConfig {
         }
     }
 }
-pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: &mut R, output: &mut R, mut writer: &mut W,config:&EncoderConfig) -> std::io::Result<()> {
+/// Encodes a delta file based on the given configuration and inputs.
+/// # Arguments
+/// * `dict` - The source file to use as a dictionary. If None, the source file will not be used.
+/// * `output` - The target file to encode.
+/// * `writer` - The writer to write the encoded data to.
+/// * `config` - The configuration to use for the encoder.
+/// # Errors
+/// Returns an error if there was an issue reading the source or target files, or writing the encoded data.
+pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: Option<&mut R>, output: &mut R, writer: &mut W,config:&EncoderConfig) -> std::io::Result<()> {
     //this simple encoder will just read all the bytes to memory.
     let mut src_bytes = Vec::new();
-    dict.read_to_end(&mut src_bytes)?;
+    if let Some(r) = dict {
+        r.read_to_end(&mut src_bytes)?;
+    }
     let mut trgt_bytes = Vec::new();
     output.read_to_end(&mut trgt_bytes)?;
     let src = src_bytes.as_slice();
@@ -205,13 +237,9 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: &mut R, o
     dbg!(&inner_config);
     let ops = translate_inner_ops(&inner_config, trgt, segments);
     let mut cur_o_pos: usize = 0;
-    let mut i = 0;
     let mut win_data = Vec::new();
-    let segments = make_segments(&ops, segment_size);
-    for mut header in segments{
+    for (seg_ops,mut header) in make_sections(&ops, segment_size){
         header.format = format;
-        let end_range = i + header.num_operations as usize;
-        let seg_ops = &ops[i..end_range];
         debug_assert!({
             let mut o = cur_o_pos;
             seg_ops.iter().all(
@@ -228,77 +256,12 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: &mut R, o
                 }
             )
         });
-        i = end_range;
         cur_o_pos += header.output_size as usize;
-        if sec_comp.is_some() {
-            let comp = sec_comp.clone().unwrap();
-            header.compression_algo = comp.algo_value();
-            //dbg!(&header);
-            write_section_header(&header, writer)?;
-            write_ops(seg_ops,&header,&mut win_data)?;
-            match comp{
-                SecondaryCompression::Smdiff (config) => {
-                    let mut crsr = std::io::Cursor::new(&mut win_data);
-                    let inner_config = EncoderConfig::default().no_match_src().set_match_target(config);
-                    encode(&mut std::io::Cursor::new(&mut Vec::new()), &mut crsr, writer, &inner_config)?;
-                },
-                SecondaryCompression::Zstd { level } => {
-                    let mut a = ::zstd::Encoder::new(writer, level)?;
-                    a.set_pledged_src_size(Some(win_data.len() as u64))?;
-                    a.include_contentsize(true)?;
-                    a.write_all(&win_data)?;
-                    writer = a.finish()?;
-                },
-                SecondaryCompression::Brotli { mut options }=> {
-                    options.size_hint(win_data.len() as u32);
-                    let mut a = ::brotlic::CompressorWriter::with_encoder(options.build().unwrap(), writer);
-                    a.write_all(&win_data)?;
-                    writer = a.into_inner()?;
-                },
-            }
-            win_data.clear();
-        }else{
-            write_section_header(&header, writer)?;
-            write_ops(seg_ops,&header,writer)?;
-        }
+        section_writer(&sec_comp, header, writer, seg_ops, &mut win_data)?; //write the section
     }
     Ok(())
 }
 
-
-fn make_segments(ops: &[Op], segment_size: usize) -> Vec<SectionHeader> {
-    let (mut segments, last_sum,last_adds, last_start) = ops.iter().enumerate().fold(
-        (Vec::new(), 0, 0, 0), // (segments, total_bytes, num_add_bytes, start_index)
-        |(mut segments, current_sum, add_bytes, start_index), (i, op)| {
-            let op_len = op.oal() as usize;
-            let add_len = if op.is_add() { op_len } else { 0 };
-            let new_sum = current_sum + op_len as usize;
-            if new_sum > segment_size {
-                segments.push(SectionHeader::new(
-                    (i-start_index) as u32,
-                    add_bytes as u32,
-                    current_sum as u32
-                    ).set_more_sections(true));
-                (segments,op_len, add_len, i)
-            } else {
-                (segments, new_sum, add_bytes+add_len, start_index)
-            }
-        },
-    );
-
-    // Check if the last segment was added or if the elements end naturally
-    if last_sum > 0 {
-        segments.push(SectionHeader::new(
-            (ops.len()-last_start) as u32,
-            last_adds as u32,
-            last_sum as u32
-        ).set_more_sections(false));
-    }else{
-        segments.last_mut().unwrap().set_more_sections(false);
-    }
-
-    segments
-}
 
 fn max_unique_substrings_gt_hash_len(hash_win_len: usize, win_size: usize, l_step: usize) -> usize {
     let m = win_size / l_step;

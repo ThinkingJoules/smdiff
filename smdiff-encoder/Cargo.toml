@@ -1,24 +1,21 @@
 [package]
 name = "smdiff-encoder"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-build = "build.rs"
+repository = "https://github.com/ThinkingJoules/smdiff"
+description = "A library for merging SMDIFF delta files together."
+license = "MIT"
+keywords = ["smdiff", "delta", "patch", "delta-encoding", "delta-compression"]
+categories = ["compression","encoding","decoding"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[features]
-default = []
-parallel = ["rayon"]
 
 [dependencies]
-smdiff-common = { path = "../smdiff-common" }
-smdiff-writer = { path = "../smdiff-writer" }
+smdiff-common = { version = "0.5.0", path = "../smdiff-common" }
+smdiff-writer = { version = "0.5.0", path = "../smdiff-writer" }
 zstd = "0.13.1"
 brotlic = "0.8.2"
-blake3 = { version = "1.5.1" }
-log = "0.4.21"
-rayon = { version = "1.10.0", optional = true }
+#log = "0.4.21"
 
 [dev-dependencies]
-simple_logger = { version = "5.0.0", features = ["threads"] }
+#simple_logger = { version = "5.0.0" }
 

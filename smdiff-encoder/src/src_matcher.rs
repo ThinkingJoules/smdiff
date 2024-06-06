@@ -134,16 +134,29 @@ impl<'a> SrcMatcher<'a> {
 const DEFAULT_SRC_WIN_SIZE: usize = 1 << 26;
 const MIN_SRC_WIN_SIZE: usize = 1 << 20;
 //const DEFAULT_PREV_SIZE: usize = 1 << 18;
+
+///Configuration for the SrcMatcher.
 #[derive(Debug, Clone)]
 pub struct SrcMatcherConfig{
-    ///How much to advance the Large Hash between storing a src hash.
+    /// How much to advance the Large Hash between storing a src hash.
+    /// Larger value means faster, but might miss good matches.
     pub l_step: usize,
     /// Max number of entries to check in the chain during matching.
-    /// Larger value means more accurate matches but slower.
+    /// Larger value means more interrogation of known hashes, but this makes it slower.
     pub chain_check: usize,
-    ///Advanced setting, leave as None for default.
+    /// How many historical hashes to store if we find multiple start points for a given hash.
+    /// This memory is shared across all hashes. Leave blank for dynamic calculation.
     pub prev_table_capacity: Option<usize>,
+    /// The maximum size of the source window.
+    /// This is how many bytes to assess and store hashes for.
+    /// Larger values consider more matches, but might hash excessively slowing down encoder.
+    /// Leave blank for dynamic calculation.
     pub max_src_win_size: Option<usize>,
+    /// The length of the hash to use for the source data.
+    /// Shorter hashes do not make better matches.
+    /// They usually will match decent matches, but will effectively 'chop up' better matches.
+    /// Smaller hashes are faster to perform.
+    /// Leave blank for dynamic calculation.
     pub hash_win_len: Option<usize>,
 }
 
@@ -156,7 +169,10 @@ impl SrcMatcherConfig {
     ///Creates a new SrcMatcherConfig with the given parameters.
     /// l_step: How much to advance the Large Hash between storing a src hash.
     /// lazy_escape_len: If the current match is less than lazy_escape_len it steps byte by byte looking for more matches.
-    /// l_table: Advanced settings, leave as None for default. See TableConfig for more information.
+    /// chain_check: Max number of entries to check in the chain during matching.
+    /// prev_table_capacity: How many historical hashes to store if we find multiple start points for a given hash.
+    /// max_src_win_size: The maximum size of the source window.
+    /// hash_win_len: The length of the hash to use for the source data. (3..=9)
     pub fn new(l_step: usize, chain_check:usize, prev_table_capacity:Option<usize>,max_src_win_size:Option<usize>,hash_win_len:Option<usize>) -> Self {
         Self { l_step, chain_check, prev_table_capacity,max_src_win_size,hash_win_len}
     }
@@ -238,7 +254,7 @@ fn align(pos:usize,l_step:usize)->usize{
 
 ///Returns the (pre_match, post_match) for the given src and trgt data.
 ///None if the hash was a collision
-pub fn extend_src_match(src:&[u8],src_start:usize,trgt:&[u8],trgt_start:usize,initial_len:usize)->Option<(usize,usize)>{
+pub(crate) fn extend_src_match(src:&[u8],src_start:usize,trgt:&[u8],trgt_start:usize,initial_len:usize)->Option<(usize,usize)>{
     //first verify hash matches the data
     let initial_match = src[src_start..src_start + initial_len]
         .iter().zip(trgt[trgt_start..trgt_start + initial_len].iter())
@@ -283,7 +299,7 @@ pub fn src_hash_len(len:usize)->usize{
     }
 }
 
-//Thought I could cut down encoding time, but this misses lots of good matches on disimilar files of similar length
+//Thought I could cut down encoding time, but this misses lots of good matches on dissimilar files of similar length
 #[allow(dead_code)]
 fn calculate_default_win_size(src_len: usize, trgt_len: usize,max_win_size:Option<usize>) -> usize {
     let mut win_size = (src_len).abs_diff(trgt_len).next_power_of_two();
