@@ -22,7 +22,7 @@ pub fn merge_2951_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2952_bytes);
     let mut patch_a = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch_a,&EncoderConfig::comp_level(9,true,Some(smdiff_encoder::SecondaryCompression::Zstd { level: 22 })))?;
+    smdiff_encoder::encode(Some(&mut src), &mut trgt, &mut patch_a,&EncoderConfig::comp_level(9,true,Some(smdiff_encoder::SecondaryCompression::Zstd { level: 22 })))?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch_a.len());
@@ -35,7 +35,7 @@ pub fn merge_2951_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     let mut trgt = Cursor::new(f_2953_bytes);
     let mut patch_b = Vec::new();
     let start = Instant::now();
-    smdiff_encoder::encode(&mut src, &mut trgt, &mut patch_b,&EncoderConfig::comp_level(9,true,Some(smdiff_encoder::SecondaryCompression::Zstd { level: 22 })))?;
+    smdiff_encoder::encode(Some(&mut src), &mut trgt, &mut patch_b,&EncoderConfig::comp_level(9,true,Some(smdiff_encoder::SecondaryCompression::Zstd { level: 22 })))?;
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);
     println!("Patch size SRC+TRGT: {}", patch_b.len());
@@ -44,7 +44,8 @@ pub fn merge_2951_2952_2953()-> Result<(), Box<dyn std::error::Error>> {
     let start = Instant::now();
     let merger = smdiff_merger::Merger::new(Cursor::new(patch_b))?.unwrap();
     let writer = merger.merge(Cursor::new(patch_a))?.unwrap().finish();
-    let summary_patch = writer.write(Vec::new(), None).unwrap();
+    let mut summary_patch = Vec::new();
+    writer.write(&mut summary_patch, None,None,None).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in merge() is: {:?}", duration);
     println!("Summary Patch size: {}", summary_patch.len());
