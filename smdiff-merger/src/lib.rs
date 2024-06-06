@@ -1,8 +1,10 @@
 use std::io::{Read, Seek, Write};
 
-use smdiff_common::{Format, Run, SectionHeader, MAX_INST_SIZE, MAX_WIN_SIZE};
-use smdiff_decoder::reader::SectionReader;
+use smdiff_common::{Format, Run, MAX_INST_SIZE, MAX_WIN_SIZE};
+use smdiff_decoder::reader::SectionIterator;
+use smdiff_encoder::{writer::section_writer, SecondaryCompression};
 use smdiff_reader::Op;
+use smdiff_writer::make_sections;
 
 
 ///Extracted Instruction with the starting position in the output buffer.
@@ -172,13 +174,12 @@ impl Stats {
 ///Memory consumption may be 2-4x the size of the encoded (uncompressed) patch.
 pub fn extract_patch_instructions<R:Read + Seek>(patch:R)->std::io::Result<(Vec<SparseOp>, Stats)>{
     let mut output = Vec::new();
-    let mut reader = SectionReader::new(patch);
+    let mut reader = SectionIterator::new(patch);
     let mut o_pos_start = 0;
     let mut stats = Stats::new();
     while let Some(res) = reader.next() {
         let (insts,_output_size) = res?;
         for inst in insts{
-            let inst = inst.clone();
             let oal_len = inst.oal() as usize;
             match &inst{
                 smdiff_common::Op::Run(_) => {
@@ -269,8 +270,8 @@ impl Merger {
     /// # Arguments
     /// * `terminal_patch` - The terminal patch that will serve as the core set of instructions.
     /// # Returns
-    /// If the terminal patch has no Copy instructions, a SummaryPatch is returned.
-    /// If the terminal patch has even a single Copy instructions, a Merger is returned.
+    /// If the terminal summary patch has no Copy instructions, a SummaryPatch is returned.
+    /// If the terminal summary patch has even a single Copy instructions, a Merger is returned.
     pub fn new<R:Read + Seek>(terminal_patch:R) -> std::io::Result<Result<Merger,SummaryPatch>> {
         let (terminal_patch,stats) = extract_patch_instructions(terminal_patch)?;
         if stats.copy_bytes == 0{
@@ -293,8 +294,8 @@ impl Merger {
     /// # Arguments
     /// * `predecessor_patch` - The patch to merge into the current summary patch.
     /// # Returns
-    /// If the resulting patch has no Copy instructions, a SummaryPatch is returned.
-    /// If the resulting patch has even a single Copy instructions, a Merger is returned.
+    /// If the resulting summary patch has no Copy instructions, a SummaryPatch is returned.
+    /// If the resulting summary patch has even a single Copy instructions, a Merger is returned.
     pub fn merge<R:Read + Seek>(mut self, predecessor_patch:R) -> std::io::Result<Result<Merger,SummaryPatch>> {
         debug_assert!({
             let mut x = 0;
@@ -335,14 +336,14 @@ impl Merger {
             Ok(Ok(self))
         }
     }
-    ///Finishes the merger and returns the final summary patch ready to be written.
+    ///Finishes the merger and returns the final summary patch ready to be written or applied.
     pub fn finish(self)->SummaryPatch{
         SummaryPatch(self.terminal_patch.into_iter().map(|s|s.1).collect())
     }
 
 }
 
-///This is returned when the current summary patch contains no Copy instructions, OR when you are finished with the Merger.
+/// This is returned when the current summary patch contains no Copy instructions, OR when you are finished with the Merger.
 #[derive(Debug)]
 pub struct SummaryPatch(Vec<Op>);
 impl SummaryPatch{
@@ -352,21 +353,26 @@ impl SummaryPatch{
     /// * `max_win_size` - The maximum output size for any window of instructions. Ignored If this will fit in micro format.
     /// # Returns
     /// The sink that was passed in.
-    pub fn write<W:Write>(self,mut sink:W,max_win_size:Option<usize>)->std::io::Result<W>{
+    pub fn write<W:Write>(self,sink:&mut W,max_win_size:Option<usize>,format:Option<Format>,sec_comp:Option<SecondaryCompression>)->std::io::Result<()>{
         //window needs to be MAX_INST_SIZE..=MAX_WIN_SIZE
         let max_win_size = max_win_size.unwrap_or(MAX_WIN_SIZE).min(MAX_WIN_SIZE).max(MAX_INST_SIZE);
-        //TODO: allow for compression, and format selection.
-        let windows = make_op_windows(&self.0, max_win_size);
-        let len = windows.len();
-        for (win_num,(ops,mut header)) in windows.into_iter().enumerate(){
-            header.format = Format::Interleaved;
-            header.more_sections = win_num < len - 1;
-            smdiff_writer::write_section_header(&header, &mut sink)?;
-            smdiff_writer::write_ops(ops, &header, &mut sink)?;
+        let format = format.unwrap_or(Format::Interleaved);
+        let mut sec_data_buffer = Vec::new();
+        for (seg_ops,mut header) in make_sections(&self.0, max_win_size){
+            header.format = format;
+            section_writer(&sec_comp, header, sink, seg_ops, &mut sec_data_buffer)?;
         }
-        Ok(sink)
+        Ok(())
+    }
+    /// Returns the ops that represents the summary patch.
+    /// This allows applying them directly to a source file without translating them to a patch file.
+    pub fn take_ops(self)->Vec<Op>{
+        self.0
     }
 }
+
+/// This is trying to efficiently splice in the new operations from the merge.
+/// We need the generics as we might return either a Vec<SparseOp> or a Vec<Op>
 fn expand_to<T, F>(
     mut target: Vec<SparseOp>,
     inserts: Vec<(usize, Vec<SparseOp>)>,
@@ -426,40 +432,12 @@ where
 
 }
 
-fn make_op_windows(ops: &[Op], max_win_size: usize) -> Vec<(&[Op],SectionHeader)> {
-    let max_win_size = max_win_size as u32;
-    let mut result = Vec::new();
-    let mut output_size = 0;
-    let mut num_add_bytes = 0;
-    let mut start_index = 0;
-
-    for (end_index, op) in ops.iter().enumerate() {
-        // Check if adding the current op exceeds the window size
-        let op_size = op.oal() as u32;
-        if output_size + op_size > max_win_size {
-            result.push((&ops[start_index..end_index],SectionHeader{ num_operations: (end_index-start_index) as u32, num_add_bytes, output_size, compression_algo: 0, format: Format::Interleaved, more_sections: true }));
-            start_index = end_index;
-            output_size = 0;
-            num_add_bytes = 0;
-        }
-        if op.is_add() {
-            num_add_bytes += op_size;
-        }
-        output_size += op_size;
-    }
-
-    // Add the last group
-    result.push((&ops[start_index..],SectionHeader{ num_operations: (ops.len()-start_index) as u32, num_add_bytes, output_size, compression_algo: 0, format: Format::Interleaved, more_sections: false }));
-
-    result
-}
-
 
 
 #[cfg(test)]
 mod test_super {
 
-    use smdiff_common::{Copy, CopySrc};
+    use smdiff_common::{Copy, CopySrc, SectionHeader};
     use smdiff_decoder::apply_patch;
     use smdiff_reader::Add;
     use super::*;
@@ -565,11 +543,13 @@ mod test_super {
         let add_run = add_run_patch();
         let merger = Merger::new(add_run).unwrap().unwrap();
         let merger = merger.merge(copy).unwrap().unwrap();
-        let merged_patch = merger.finish().write(Vec::new(), None).unwrap();
+        let mut merged_patch = Vec::new();
+        merger.finish().write(&mut merged_patch, None,None,None).unwrap();
         let mut cursor = Cursor::new(merged_patch);
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         apply_patch(&mut cursor, Some(&mut Cursor::new(SRC.to_vec())), &mut output).unwrap();
         //print output as a string
+        let output = output.into_inner();
         let as_str = std::str::from_utf8(&output).unwrap();
         println!("{}",as_str);
         assert_eq!(output,answer);
@@ -582,11 +562,13 @@ mod test_super {
         let add_run = add_run_patch();
         let merger = Merger::new(copy).unwrap().unwrap();
         let merger = merger.merge(add_run).unwrap().unwrap();
-        let merged_patch = merger.finish().write(Vec::new(), None).unwrap();
+        let mut merged_patch = Vec::new();
+        merger.finish().write(&mut merged_patch, None,None,None).unwrap();
         let mut cursor = Cursor::new(merged_patch);
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         apply_patch(&mut cursor, Some(&mut Cursor::new(SRC.to_vec())), &mut output).unwrap();
         //print output as a string
+        let output = output.into_inner();
         let as_str = std::str::from_utf8(&output).unwrap();
         println!("{}",as_str);
         assert_eq!(output,answer);
@@ -599,11 +581,13 @@ mod test_super {
         let comp = complex_patch();
         let merger = Merger::new(comp).unwrap().unwrap();
         let merger = merger.merge(add_run).unwrap().unwrap();
-        let merged_patch = merger.finish().write(Vec::new(), None).unwrap();
+        let mut merged_patch = Vec::new();
+        merger.finish().write(&mut merged_patch, None,None,None).unwrap();
         let mut cursor = Cursor::new(merged_patch);
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         apply_patch(&mut cursor, Some(&mut Cursor::new(SRC.to_vec())), &mut output).unwrap();
         //print output as a string
+        let output = output.into_inner();
         let as_str = std::str::from_utf8(&output).unwrap();
         println!("{}",as_str);
         assert_eq!(output,answer);
@@ -616,11 +600,13 @@ mod test_super {
         let comp = complex_patch();
         let merger = Merger::new(add_run).unwrap().unwrap();
         let merger = merger.merge(comp).unwrap().unwrap();
-        let merged_patch = merger.finish().write(Vec::new(), None).unwrap();
+        let mut merged_patch = Vec::new();
+        merger.finish().write(&mut merged_patch, None,None,None).unwrap();
         let mut cursor = Cursor::new(merged_patch);
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         apply_patch(&mut cursor, Some(&mut Cursor::new(SRC.to_vec())), &mut output).unwrap();
         //print output as a string
+        let output = output.into_inner();
         let as_str = std::str::from_utf8(&output).unwrap();
         println!("{}",as_str);
         assert_eq!(output,answer);
@@ -635,12 +621,14 @@ mod test_super {
         let merger = Merger::new(copy).unwrap().unwrap();
         let merger = merger.merge(comp).unwrap().unwrap();
         let merger = merger.merge(add_run).unwrap().unwrap_err();
-        let merged_patch = merger.write(Vec::new(), None).unwrap();
+        let mut merged_patch = Vec::new();
+        merger.write(&mut merged_patch, None,None,None).unwrap();
         let mut cursor = Cursor::new(merged_patch);
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         //We don't need Src, since the last merge yielded SummaryPatch
         apply_patch::<_, Cursor<Vec<u8>>,_>(&mut cursor, None, &mut output).unwrap();
         //print output as a string
+        let output = output.into_inner();
         let as_str = std::str::from_utf8(&output).unwrap();
         println!("{}",as_str);
         assert_eq!(output,answer);
@@ -701,8 +689,9 @@ mod test_super {
         let p1 = sink.into_inner();
         let p1_answer = b"hello world!";
         let mut cursor = Cursor::new(p1.clone());
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         apply_patch(&mut cursor, Some(&mut Cursor::new(src.to_vec())), &mut output).unwrap();
+        let output = output.into_inner();
         println!("{}",std::str::from_utf8(&output).unwrap());
         assert_eq!(output,p1_answer); //ensure our instructions do what we think they are.
         let patch_1 = Cursor::new(p1);
@@ -778,19 +767,22 @@ mod test_super {
         let p2 = sink.into_inner();
         let p2_answer = b"Hello! Hello! Hello. hello. hello...";
         let mut cursor = Cursor::new(p2.clone());
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         apply_patch(&mut cursor, Some(&mut Cursor::new(p1_answer.to_vec())), &mut output).unwrap();
+        let output = output.into_inner();
         println!("{}",std::str::from_utf8(&output).unwrap());
         assert_eq!(output,p2_answer); //ensure our instructions do what we think they are.
         let patch_2 = Cursor::new(p2);
         let merger = Merger::new(patch_2).unwrap().unwrap();
         let merger = merger.merge(patch_1).unwrap().unwrap();
-        let merged_patch = merger.finish().write(Vec::new(), None).unwrap();
+        let mut merged_patch = Vec::new();
+        merger.finish().write(&mut merged_patch, None,None,None).unwrap();
         let mut cursor = Cursor::new(merged_patch);
-        let mut output = Vec::new();
+        let mut output = Cursor::new(Vec::new());
         let answer = b"Hello! Hello! Hello. hello. hello...";
         apply_patch(&mut cursor, Some(&mut Cursor::new(src.to_vec())), &mut output).unwrap();
         //print output as a string
+        let output = output.into_inner();
         let as_str = std::str::from_utf8(&output).unwrap();
         println!("{}",as_str);
         assert_eq!(output,answer);

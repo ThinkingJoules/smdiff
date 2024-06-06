@@ -1,14 +1,15 @@
 [package]
 name = "smdiff-merger"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-smdiff-common ={ path = "../smdiff-common" }
-smdiff-reader ={ path = "../smdiff-reader" }
-smdiff-decoder ={ path = "../smdiff-decoder" }
-smdiff-writer ={ path = "../smdiff-writer" }
+smdiff-common ={ version = "0.5.0", path = "../smdiff-common" }
+smdiff-reader ={ version = "0.5.0", path = "../smdiff-reader" }
+smdiff-writer ={ version = "0.5.0", path = "../smdiff-writer" }
+smdiff-decoder ={ version = "0.5.0", path = "../smdiff-decoder" }
+smdiff-encoder ={ version = "0.2.0", path = "../smdiff-encoder" }
 
 [dev-dependencies]
