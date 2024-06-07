@@ -251,20 +251,20 @@ Original Table with Smdiff comparisons
 2. compress         -           19,939,390     19,939,453
 3. gzip             -           12,973,443     12,998,097
 4. Vcdiff           -           15,358,786     15,371,737
-5. Vcdiff-d         -              100,971     26,383,849
-6. Vcdiff-dc        -               97,246     14,461,203
-7. Vcdiff-dcw       -              256,445      1,248,543
-8. Smdiff           -           15,827,696     15,815,007
-9. Smdiff-d         -               84,018        420,279
-10.Smdiff-dc        -                  N/A            N/A
-11.Smdiff-dcw       -               76,860        276,061
+5. Smdiff           -           15,827,696     15,815,007
+6. Vcdiff-d         -              100,971     26,383,849
+7. Smdiff-d         -               83,118        414,570
+8. Vcdiff-dc        -               97,246     14,461,203
+9. Smdiff-dc        -                  N/A            N/A
+10.Vcdiff-dcw       -              256,445      1,248,543
+11.Smdiff-dcw       -               74,463        260,724
 ```
-It is probably really only fair to compare the 'compress only' (Vcdiff & Smdiff).
+It is not fair to compare any of these numbers if we are trying to assess the cost of the simpler encoding *format* (SMDIFF vs VCDIFF). To do that we need a different approach.
 
-If we want to compare the *format* we need a different approach. Since I do not have the original source code for VCDIFF encoder, or the exact delta files used in the tables, I cannot do an exact comparison to the data in the table. From testing against other extant encoders, I converted the .vcdiff delta file directly in to .smdiff format. The resulting files were actually a little less than 1% *smaller*. They did not have any periodic sequences in the original .vcdiff format. The Smdiff output is ~3% larger than the table values for Vcdiff, so I would assume that they must had a few periodic sequences in their data.
+Since I do not have the original source code for VCDIFF encoder, or the exact delta files used in the tables, I cannot do an exact comparison to the data in the table. From testing against other extant encoders, I converted the .vcdiff delta file directly in to .smdiff format. The resulting files were actually a little *smaller* (< 0.05% smaller). They did not have any periodic sequences in the original .vcdiff format.
 
 ## 7. Conclusion
-My conclusion is that this new format is probably about a wash unless your data (and encoder) can leverage the periodic sequence that does not exist in SMDIFF. The spec is massively simplified, and having fixed and known secondary compressors defined in the spec will aide in interoperability.
+My conclusion is that this new format is probably about a wash unless your data (and encoder) can leverage the periodic sequence that does not exist in SMDIFF. The spec is massively simplified to aide in interoperability, and lower the effort to make multiple encoder/decoder implementations.
 
 ## 8. References
 [1] https://www.rfc-editor.org/rfc/rfc3284

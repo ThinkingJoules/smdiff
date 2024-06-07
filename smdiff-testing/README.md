@@ -12,32 +12,32 @@ Using the first two files from original VCDIFF spec (gcc-2.95.1 and gcc-2.95.2),
 ```
                 gcc-2.95.1         Encode (s) |   Decode (s) | 2.92.2 Delta | Compression (%)
 -------------------------------------------------------------------------------------------
-1. raw size      55,746,560                                      55,797,760
-2. compress         -                                            19,939,390
-3. gzip             -                                            12,973,443
+1. raw size      55,746,560    |              |              |   55,797,760 |
+2. compress         -          |              |              |   19,939,390 |
+3. gzip             -          |              |              |   12,973,443 |
 4. zstd(22)                    |       26.554 |        0.193 |    7,983,434 |         14.308
 5. brotli(best)                |       65.742 |        0.109 |    8,097,690 |         14.513
-6. Vcdiff           -                                            15,358,786
-7. Smdiff           -          |       13.226 |        0.217 |   17,743,941 |         31.800
+6. Vcdiff           -          |              |              |   15,358,786 |
+7. Smdiff           -          |        5.148 |        0.217 |   16,594,811 |         29.741
 8. xdelta3          -          |        5.200 |          -   |   13,913,641 |         24.940
-9. Vcdiff-d         -                                               100,971
-10.Smdiff-d                    |        0.602 |        0.062 |       81,361 |          0.146
+9. Vcdiff-d         -          |              |              |      100,971 |
+10.Smdiff-d                    |        0.735 |        0.035 |       82,296 |          0.147
 11.xdelta3-d                   |        0.360 |          -   |       73,174 |          0.130
-12.Vcdiff-dcw       -                                               256,445
-13.Smdiff-dcw                  |        0.691 |        0.062 |       73,140 |          0.131
+12.Vcdiff-dcw       -          |              |              |      256,445 |
+13.Smdiff-dcw                  |        1.009 |        0.034 |       73,887 |          0.132
 14.xdelta3-dcw                 |        0.407 |          -   |       66,687 |          0.120
 (the following are with secondary compressors, to highest compression)
 ----------------------------+--------------+--------------+--------------+-----------------
-Smdiff-d + smdiff              |        0.587 |        0.062 |        48060 |          0.086
-Smdiff-d + zstd                |        0.584 |        0.064 |        37924 |          0.068
-Smdiff-d + brotli              |        0.649 |        0.062 |        34799 |          0.062
-Smdiff-dcw + smdiff            |        0.706 |        0.062 |        46701 |          0.084
-Smdiff-dcw + zstd              |        0.681 |        0.063 |        37924 |          0.068
-Smdiff-dcw + brotli            |        0.764 |        0.062 |        35325 |          0.063
+Smdiff-d + smdiff              |        0.753 |        0.033 |        82336 |          0.148
+Smdiff-d + zstd                |        0.760 |        0.036 |        41142 |          0.074
+Smdiff-d + brotli              |        0.842 |        0.035 |        38198 |          0.068
+Smdiff-dcw + smdiff            |        0.827 |        0.034 |        73917 |          0.132
+Smdiff-dcw + zstd              |        0.848 |        0.034 |        40645 |          0.073
+Smdiff-dcw + brotli            |        0.921 |        0.034 |        38040 |          0.068
 xdelta3-dcw + lzma             |        0.407 |          -   |        35734 |          0.064
 ```
 
-In broad strokes my encoder is not too bad for such young (and safe) codebase. ~20% larger than xdelta in the base case, and about 30-50% slower.
+In broad strokes my encoder is not too bad for such young (and safe) codebase. The target matcher (compression) routine isn't very good and needs work. It must be missing matches somehow. The source matcher finds almost all the matches that xdelta3 does. Seems my encoder is 2.5-3x slower than xd3. Still room for improvement.
 
 
 The verbose output for xdelta3 (source only delta encoding) is:
