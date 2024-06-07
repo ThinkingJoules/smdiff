@@ -108,60 +108,62 @@ pub fn analyze_sec_comp_large_file_worst()-> Result<(), Box<dyn std::error::Erro
     print_table_s(values, raw_size);
     Ok(())
 }
-pub fn analyze_sec_comp_large_file_best()-> Result<(), Box<dyn std::error::Error>> {
+pub fn analyze_sec_comp_large_file_best(skip_comp:bool)-> Result<(), Box<dyn std::error::Error>> {
     let mut f_2952 = fs::File::open(&Path::new(DIR_PATH).join("gcc-2.95.2.tar"))?;
     let mut f_2952_bytes = Vec::new();
     f_2952.read_to_end(&mut f_2952_bytes).unwrap();
     let raw_size = f_2952_bytes.len();
     let mut values = Vec::new();
-
-    let mut src = Cursor::new(Vec::new());
-    let mut trgt = Cursor::new(f_2952_bytes);
-    let mut patch = Vec::new();
-    let start = Instant::now();
-    smdiff_encoder::encode(None, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(9)))?;
-    let duration = start.elapsed();
-    let f_2952_bytes = trgt.into_inner();
-    let mut decode_sm = Cursor::new(Vec::new());
-    let start = Instant::now();
-    src.rewind()?;
-    let mut reader = Cursor::new(&patch);
-    smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
-    let duration_2 = start.elapsed();
-    let decode_sm = decode_sm.into_inner();
-    assert_eq!(decode_sm, f_2952_bytes);
-    values.push(("smdiff(trgt) (compress)",(duration,duration_2,patch.len())));
-
-    let start = Instant::now();
-    let mut zstd_2952 = smdiff_encoder::zstd::Encoder::new(Vec::new(), 22).unwrap();
-    zstd_2952.write_all(&f_2952_bytes).unwrap();
-    let zstd_comp_bytes = zstd_2952.finish().unwrap();
-    let zstd_enc_dur = start.elapsed();
-    let start = Instant::now();
-    let mut zstd_2952 = smdiff_decoder::zstd::StreamingDecoder::new(std::io::Cursor::new(&zstd_comp_bytes)).unwrap();
-    let mut zstd_decomp = Vec::new();
-    zstd_2952.read_to_end(&mut zstd_decomp).unwrap();
-    let zstd_dec_dur = start.elapsed();
-    assert_eq!(f_2952_bytes, zstd_decomp);
-    values.push(("zstd compress trgt",(zstd_enc_dur, zstd_dec_dur, zstd_comp_bytes.len())));
-
     let mut options = BrotliEncoderOptions::new();
     options.quality(Quality::best());
     options.block_size(BlockSize::best());
     options.window_size(WindowSize::best());
     options.mode(CompressionMode::Generic);
-    let start = Instant::now();
-    let mut brotli_2952 = smdiff_encoder::brotli::CompressorWriter::with_encoder(options.build().unwrap(),Vec::new());
-    brotli_2952.write_all(&f_2952_bytes).unwrap();
-    let brotli_comp_bytes = brotli_2952.into_inner().unwrap();
-    let brotli_enc_dur = start.elapsed();
-    let start = Instant::now();
-    let mut brotli_2952 = smdiff_decoder::brotli::DecompressorReader::new(std::io::Cursor::new(&brotli_comp_bytes));
-    let mut brotli_decomp = Vec::new();
-    brotli_2952.read_to_end(&mut brotli_decomp).unwrap();
-    let brotli_dec_dur = start.elapsed();
-    assert_eq!(f_2952_bytes, brotli_decomp);
-    values.push(("brotli compress trgt",(brotli_enc_dur, brotli_dec_dur, brotli_comp_bytes.len())));
+    if !skip_comp{
+        let mut src = Cursor::new(Vec::new());
+        let mut trgt = Cursor::new(f_2952_bytes);
+        let mut patch = Vec::new();
+        let start = Instant::now();
+        smdiff_encoder::encode(None, &mut trgt, &mut patch,&EncoderConfig::default().no_match_src().set_match_target(TrgtMatcherConfig::comp_level(9)))?;
+        let duration = start.elapsed();
+        let f_2952_bytes = trgt.into_inner();
+        let mut decode_sm = Cursor::new(Vec::new());
+        let start = Instant::now();
+        src.rewind()?;
+        let mut reader = Cursor::new(&patch);
+        smdiff_decoder::apply_patch(&mut reader,Some(&mut src) , &mut decode_sm).unwrap();
+        let duration_2 = start.elapsed();
+        let decode_sm = decode_sm.into_inner();
+        assert_eq!(decode_sm, f_2952_bytes);
+        values.push(("smdiff(trgt) (compress)",(duration,duration_2,patch.len())));
+
+        let start = Instant::now();
+        let mut zstd_2952 = smdiff_encoder::zstd::Encoder::new(Vec::new(), 22).unwrap();
+        zstd_2952.write_all(&f_2952_bytes).unwrap();
+        let zstd_comp_bytes = zstd_2952.finish().unwrap();
+        let zstd_enc_dur = start.elapsed();
+        let start = Instant::now();
+        let mut zstd_2952 = smdiff_decoder::zstd::StreamingDecoder::new(std::io::Cursor::new(&zstd_comp_bytes)).unwrap();
+        let mut zstd_decomp = Vec::new();
+        zstd_2952.read_to_end(&mut zstd_decomp).unwrap();
+        let zstd_dec_dur = start.elapsed();
+        assert_eq!(f_2952_bytes, zstd_decomp);
+        values.push(("zstd compress trgt",(zstd_enc_dur, zstd_dec_dur, zstd_comp_bytes.len())));
+
+
+        let start = Instant::now();
+        let mut brotli_2952 = smdiff_encoder::brotli::CompressorWriter::with_encoder(options.build().unwrap(),Vec::new());
+        brotli_2952.write_all(&f_2952_bytes).unwrap();
+        let brotli_comp_bytes = brotli_2952.into_inner().unwrap();
+        let brotli_enc_dur = start.elapsed();
+        let start = Instant::now();
+        let mut brotli_2952 = smdiff_decoder::brotli::DecompressorReader::new(std::io::Cursor::new(&brotli_comp_bytes));
+        let mut brotli_decomp = Vec::new();
+        brotli_2952.read_to_end(&mut brotli_decomp).unwrap();
+        let brotli_dec_dur = start.elapsed();
+        assert_eq!(f_2952_bytes, brotli_decomp);
+        values.push(("brotli compress trgt",(brotli_enc_dur, brotli_dec_dur, brotli_comp_bytes.len())));
+    }
 
 
 

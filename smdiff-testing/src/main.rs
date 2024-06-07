@@ -32,8 +32,8 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     // TESTS
     //merge_2951_2952_2953()?;
 
-    let config = EncoderConfig::default().set_match_target(TrgtMatcherConfig::default());
-    println!("{:?}", config);
+    // let config = EncoderConfig::comp_level(9, true, None);
+    // println!("{:?}", config);
     // encode_test_gcc_2951_2952(&config)?;
     // encode_test_gcc_2952_2953(&config)?;
 
@@ -47,8 +47,8 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     // ANALYSIS
     // vc_analysis()?;
     // analyze_sec_comp_large_file_worst()?;
-    // analyze_sec_comp_large_file_best()?;
-    //analyze_sec_comp_sentence_best()?;
+    // analyze_sec_comp_large_file_best(true)?;
+    // analyze_sec_comp_sentence_best()?;
 
     new_encode_test_gcc_2951_2952()?;
     Ok(())
