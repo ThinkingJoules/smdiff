@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 vcdiff-reader = "1.0.0"
-smdiff-common ={ path = "../smdiff-common" }
-smdiff-writer ={ path = "../smdiff-writer" }
+smdiff-common ={ version = "0.5.0", path = "../smdiff-common" }
+smdiff-writer ={ version = "0.5.0", path = "../smdiff-writer" }
 vcdiff-common = "1.0.0"
