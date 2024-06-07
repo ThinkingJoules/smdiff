@@ -133,7 +133,7 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
                                 while processed < total {
                                     let remaining = total - processed;
                                     let chunk_size = remaining.min(slice_len);
-                                    dbg!(slice_len,chunk_size);
+                                    //dbg!(slice_len,chunk_size);
                                     if cur_win_size + chunk_size > MAX_WIN_SIZE as u32{
                                         let header = SectionHeader {
                                             num_operations:cur_win.len() as u32,
@@ -199,7 +199,7 @@ pub fn convert_vcdiff_to_smdiff<R: std::io::Read+Seek, W: std::io::Write>(reader
             VCDiffReadMsg::EndOfFile => break,
         }
     }
-    dbg!(cur_o_pos);
+    //dbg!(cur_o_pos);
     //now we determine what we need to write
     let header = SectionHeader {
         num_operations:cur_win.len() as u32,
