@@ -30,10 +30,10 @@ const _URLS: [&str; 6] = [
 ];
 fn main()-> Result<(), Box<dyn std::error::Error>> {
     // TESTS
-    merge_2951_2952_2953()?;
+    //merge_2951_2952_2953()?;
 
-    // let config = EncoderConfig::default().set_match_target(TrgtMatcherConfig::default());
-    // println!("{:?}", config);
+    let config = EncoderConfig::default().set_match_target(TrgtMatcherConfig::default());
+    println!("{:?}", config);
     // encode_test_gcc_2951_2952(&config)?;
     // encode_test_gcc_2952_2953(&config)?;
 
@@ -50,7 +50,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     // analyze_sec_comp_large_file_best()?;
     //analyze_sec_comp_sentence_best()?;
 
-    //new_encode_test_gcc_2951_2952()?;
+    new_encode_test_gcc_2951_2952()?;
     Ok(())
 }
 

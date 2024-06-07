@@ -258,7 +258,7 @@ pub fn new_encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> 
         &mut patch,
         &EncoderConfig::default()
 
-        .set_match_src(SrcMatcherConfig::comp_level(9)).set_match_target(TrgtMatcherConfig::comp_level(9))
+        //.set_match_src(SrcMatcherConfig::comp_level(9)).set_match_target(TrgtMatcherConfig::comp_level(9))
 
         // .no_match_src().set_match_target(TrgtMatcherConfig {
         //     compress_early_exit: 70,
@@ -268,14 +268,13 @@ pub fn new_encode_test_gcc_2951_2952()-> Result<(), Box<dyn std::error::Error>> 
         // })
 
 
-        // .set_match_src(
-        //     SrcMatcherConfig {
-        //         l_step: 1,
-        //         chain_check: 1,
-        //         prev_table_capacity: Some(1 << 16),
-        //         max_src_win_size: Some(1<<19),//None, //Some(1 << 24),
-        //         hash_win_len:Some(9)
-        //     }).set_lazy_escape_len(90)
+        .set_match_src(
+            SrcMatcherConfig {
+                l_step: 2,
+                chain_check: 1,
+                max_src_win_size: None,//None, //Some(1 << 24),
+                hash_win_len:Some(9)
+            }).set_lazy_escape_len(90)
         ).unwrap();
     let duration = start.elapsed();
     println!("Time elapsed in encode() is: {:?}", duration);

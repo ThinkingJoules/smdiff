@@ -1,51 +1,49 @@
-use crate::{hasher::{HasherCusor, SmallHashCursor}, hashmap::{BasicHashTable, ChainList}, Ranger};
+use crate::{hasher::*, hashmap::{BasicHashTable, ChainList}, Ranger};
 
 
 
-pub(crate) struct TrgtMatcher<'a>{
+pub(crate) struct TrgtMatcher{
     compress_early_exit:usize,
     chain_check: usize,
-    hasher: SmallHashCursor<'a>,
+    pub(crate) fwd_hash: u32,
+    pub(crate) fwd_pos: usize,
+    pub(crate) max_fwd_hash_pos: usize,
     table: BasicHashTable,
     chain: ChainList,
-    hash_win_len:usize,
 }
 
-impl<'a> TrgtMatcher<'a> {
-    pub(crate) fn new(compress_early_exit: usize, chain_check: usize,table: BasicHashTable,hash_win_len:usize,hasher: SmallHashCursor<'a>,chain:ChainList) -> Self {
-        Self { compress_early_exit, chain_check, table, hash_win_len, hasher,chain }
-    }
-    pub(crate) fn hash_win_len(&self)->usize{
-        self.hash_win_len
-    }
-    pub(crate) fn peek_next_pos(&self) -> usize{
-        self.hasher.peek_next_pos()
-    }
-    pub(crate) fn peek_next_hash(&self) -> usize{
-        self.hasher.peek_next_hash()
-    }
-    pub(crate) fn advance_and_store(&mut self) {
-        //let start_pos = hasher.peek_next_pos();
-        //dbg!(start_pos);
-        self.hasher.next();
-        self.store(self.hasher.peek_next_hash(),self.hasher.peek_next_pos());
-    }
-    pub(crate) fn seek(&mut self, pos:usize){
-        debug_assert!(self.hasher.peek_next_pos() <= pos, "self.hasher.peek_next_pos({}) > pos({})",self.hasher.peek_next_pos(),pos);
-        if let Some(_hash) = self.hasher.seek(pos) {
-            //don't store the hash here. We seek before we query,
-            // so we want to store using the advance_and_store method.
-            // self.store(hash,pos)
-        }
-    }
+impl TrgtMatcher {
+    // pub(crate) fn hash_win_len(&self)->usize{
+    //     self.hash_win_len
+    // }
+    // pub(crate) fn peek_next_pos(&self) -> usize{
+    //     self.hasher.peek_next_pos()
+    // }
+    // pub(crate) fn peek_next_hash(&self) -> usize{
+    //     self.hasher.peek_next_hash()
+    // }
+    // pub(crate) fn advance_and_store(&mut self) {
+    //     //let start_pos = hasher.peek_next_pos();
+    //     //dbg!(start_pos);
+    //     self.hasher.next();
+    //     self.store(self.hasher.peek_next_hash(),self.hasher.peek_next_pos());
+    // }
+    // pub(crate) fn seek(&mut self, pos:usize){
+    //     debug_assert!(self.hasher.peek_next_pos() <= pos, "self.hasher.peek_next_pos({}) > pos({})",self.hasher.peek_next_pos(),pos);
+    //     if let Some(_hash) = self.hasher.seek(pos) {
+    //         //don't store the hash here. We seek before we query,
+    //         // so we want to store using the advance_and_store method.
+    //         // self.store(hash,pos)
+    //     }
+    // }
     ///Returns (trgt_pos, post_match) post_match *includes* the hash_win_len.
-    pub fn find_best_trgt_match(&self,trgt:&[u8],cur_o_pos:usize,hash:usize)->Option<(usize,usize)>{
-        let table_pos = self.table.get(hash)?;
-        let mut iter = std::iter::once(table_pos).chain(self.chain.iter_prev_starts(table_pos, cur_o_pos,hash)).filter(|start|start + self.hash_win_len < cur_o_pos);
+    pub fn find_best_trgt_match(&self,trgt:&[u8])->Option<(usize,usize)>{
+        let cur_hash = self.fwd_hash as usize;
+        let table_pos = self.table.get(cur_hash)?;
+        let mut iter = std::iter::once(table_pos).chain(self.chain.iter_prev_starts(table_pos, self.fwd_pos,cur_hash)).filter(|start|start + 4 < self.fwd_pos);
         let mut chain = self.chain_check;
         let mut best = None;
         let mut best_len = 0;
-        let hash_len = self.hash_win_len;
         let mut _chain_len = 0;
         let mut _collisions = 0;
         loop {
@@ -55,8 +53,8 @@ impl<'a> TrgtMatcher<'a> {
             if let Some(start_pos) = iter.next() {
                 _chain_len += 1;
                 //first verify hash matches the data
-                let initial_match = trgt[start_pos..start_pos + hash_len]
-                .iter().zip(trgt[cur_o_pos..cur_o_pos + hash_len].iter())
+                let initial_match = trgt[start_pos..start_pos + 4]
+                .iter().zip(trgt[self.fwd_pos..self.fwd_pos + 4].iter())
                 .all(|(a,b)| a == b);
                 if !initial_match{
                     // dbg!(&trgt[start_pos..start_pos + hash_len], &trgt[cur_o_pos..cur_o_pos + hash_len],cur_o_pos,start_pos);
@@ -66,14 +64,14 @@ impl<'a> TrgtMatcher<'a> {
                 }
 
                 // Extend forward
-                let match_end = start_pos + hash_len;
-                let trgt_end = cur_o_pos + hash_len;
-                let src_remain = cur_o_pos - match_end;
+                let match_end = start_pos + 4;
+                let trgt_end = self.fwd_pos + 4;
+                let src_remain = self.fwd_pos - match_end;
                 let trgt_remain = trgt.len() - trgt_end;
                 let post_match = (0..src_remain.min(trgt_remain)).take_while(|&i| {
                     trgt[match_end + i] == trgt[trgt_end + i]
                 }).count();
-                let total_post_match = post_match + hash_len;
+                let total_post_match = post_match + 4;
                 if total_post_match > best_len{
                     best_len = total_post_match;
                     best = Some((start_pos,total_post_match));
@@ -154,7 +152,7 @@ impl TrgtMatcherConfig {
         self.prev_table_capacity = Some(table_capacity);
         self
     }
-    pub(crate) fn build<'a>(&mut self,trgt:&'a [u8],trgt_start_pos:usize)->TrgtMatcher<'a>{
+    pub(crate) fn build(&mut self,trgt:&[u8],trgt_start_pos:usize)->TrgtMatcher{
         let Self { compress_early_exit, chain_check,hash_win_len, prev_table_capacity } = self;
         let effective_len = trgt.len() - trgt_start_pos;
         let win_size = hash_win_len.get_or_insert(trgt_hash_len(effective_len));
@@ -166,24 +164,23 @@ impl TrgtMatcherConfig {
         prev_table_capacity.get_or_insert(DEFAULT_PREV_SIZE.min(effective_len.next_power_of_two()>>1));
         //let table = BasicHashTable::new(DEFAULT_TRGT_WIN_SIZE.min((effective_len + (effective_len/2)).next_power_of_two() >> 1), self.prev_table_capacity.unwrap(),if *win_size>4{8}else{4});
         let table = BasicHashTable::new(DEFAULT_TRGT_WIN_SIZE.min((effective_len + (effective_len/2)).next_power_of_two() >> 1), *win_size<=4);
-        let hasher = SmallHashCursor::new(trgt, *win_size);
-        let mut matcher = TrgtMatcher::new(
-            *compress_early_exit,
-            *chain_check,
+        let mut matcher = TrgtMatcher{
+            compress_early_exit: *compress_early_exit,
+            chain_check: *chain_check,
+            fwd_hash: 0,
+            fwd_pos: trgt_start_pos,
             table,
-            *win_size,
-            hasher,
-            ChainList::new(self.prev_table_capacity.unwrap())
-        );
+            chain: ChainList::new(self.prev_table_capacity.unwrap()),
+            max_fwd_hash_pos: trgt.len()-4,
+        };
         if trgt_start_pos > 0 { //prefill with hash start positions.
             let start = trgt_start_pos.saturating_sub(self.prev_table_capacity.unwrap());
             let end = trgt_start_pos;
-            matcher.seek(start);
-            for _ in start..end{
-                matcher.advance_and_store();
-                // if let Some((hash,pos)) = hasher.next() {
-                //     debug_assert!(pos == i);
-                // }else{break;}
+            let mut hash = calculate_small_checksum(&trgt[start..]);
+            matcher.store(hash as usize, start);
+            for old_pos in start..end{
+                hash = update_small_checksum_fwd(hash, trgt[old_pos], trgt[old_pos + 4]);
+                matcher.store(hash as usize, old_pos + 1);
             }
         }
         matcher

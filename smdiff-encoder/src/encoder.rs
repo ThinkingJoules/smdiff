@@ -15,7 +15,7 @@ There are several ways to configure this encoder, so it should allow for tuning 
 
 
 */
-use crate::{hasher::{HasherCusor, LargeHashCursor}, src_matcher::SrcMatcherConfig, trgt_matcher::TrgtMatcherConfig};
+use crate::{hasher::*, src_matcher::{add_start_positions_to_matcher, SrcMatcherConfig}, trgt_matcher::TrgtMatcherConfig};
 
 #[allow(unused)]
 #[derive(Copy,Clone,Debug)]
@@ -159,20 +159,13 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
     //now we decide our matcher configs, at least one of these will be Some.
     let _start = std::time::Instant::now();
     let mut trgt_matcher = config.match_trgt.as_mut().map(|c| c.build(trgt, cur_o_pos));
-    let mut src_matcher = config.match_src.as_mut().map(|c| c.build(src, cur_o_pos, trgt_len));
+    let mut src_matcher = config.match_src.as_mut().map(|c| c.build(src, cur_o_pos, trgt));
     // let _elapsed = _start.elapsed();
     // dbg!(_elapsed);
     let lazy_escape_len = config.lazy_escape_len.unwrap_or(90);
 
-    let small_len = trgt_matcher.as_ref()
-        .map(|m| m.hash_win_len())
-        .unwrap_or(4);
-    let _large_len =  src_matcher.as_ref()
-        .map(|m| m.hash_win_len())
-        .unwrap_or(9);
-    let min_match_value = small_len.min(4);
+    let min_match_value = 4;
     let mut min_match= min_match_value;
-    let mut large_hasher = src_matcher.as_ref().map(|m|LargeHashCursor::new(trgt,m.hash_win_len()));
     let mut run_len = 0;
     let mut run_byte = 0;
     let mut state = EncoderState::StartNewMatch;
@@ -187,12 +180,33 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
             EncoderState::StartNewMatch => {
                 //we setup for trying to start a new match
                 run_len = find_initial_run_len(&trgt[cur_o_pos..], min_match_value, &mut run_byte);
+
                 if let Some(matcher) = src_matcher.as_mut(){
-                    matcher.add_start_positions_to_matcher(cur_o_pos);
-                    large_hasher.as_mut().map(|h|h.seek(cur_o_pos));
+                    if matcher.next_hash_pos <= cur_o_pos{
+                        add_start_positions_to_matcher(matcher, cur_o_pos, src)
+                    }
+                    if matcher.fwd_pos < matcher.max_fwd_hash_pos{
+                        if matcher.fwd_pos + 9 > cur_o_pos{
+                            for old_pos in matcher.fwd_pos..cur_o_pos{
+                                matcher.fwd_hash = update_large_checksum_fwd(matcher.fwd_hash, trgt[old_pos], trgt[old_pos+9]);
+                            }
+                        }else{
+                            matcher.fwd_hash = calculate_large_checksum(&trgt[cur_o_pos..cur_o_pos+9]);
+                        }
+                        matcher.fwd_pos = cur_o_pos;
+                    }
                 };
                 if let Some(matcher) = trgt_matcher.as_mut(){
-                    matcher.seek(cur_o_pos);
+                    if matcher.fwd_pos < matcher.max_fwd_hash_pos{
+                        if matcher.fwd_pos + 4 > cur_o_pos{
+                            for old_pos in matcher.fwd_pos..cur_o_pos{
+                                matcher.fwd_hash = update_small_checksum_fwd(matcher.fwd_hash, trgt[old_pos], trgt[old_pos+4]);
+                            }
+                        }else{
+                            matcher.fwd_hash = calculate_small_checksum(&trgt[cur_o_pos..cur_o_pos+4]);
+                        }
+                        matcher.fwd_pos = cur_o_pos;
+                    }
                 }
                 //adjust our min_match so lazy matching works.
                 let last_match_end_pos = ops.last().map(|x|x.o_pos()+x.len()).unwrap_or(0);
@@ -219,11 +233,10 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
                     }
                 }
 
-                if let Some(hasher) = large_hasher.as_mut(){
-                    if cur_o_pos + hasher.win_size() <= max_trgt_match_len{
-                        let matcher = src_matcher.as_mut().unwrap();
-                        debug_assert!(hasher.peek_next_pos() == cur_o_pos, "lh.pos {} != cur o {}",hasher.peek_next_pos(),cur_o_pos);
-                        if let Some((src_start,pre_match,post_match)) = matcher.find_best_src_match(src, trgt, cur_o_pos, hasher.peek_next_hash()) {
+                if let Some(matcher) = src_matcher.as_mut(){
+                    if cur_o_pos + 9 <= max_trgt_match_len{
+                        debug_assert!(matcher.fwd_pos == cur_o_pos, "lh.pos {} != cur o {}",matcher.fwd_pos,cur_o_pos);
+                        if let Some((src_start,pre_match,post_match)) = matcher.find_best_src_match(src, trgt) {
                             let length = pre_match + post_match;
                             if post_match >= min_match{
                                 let trgt_match_start = cur_o_pos - pre_match;
@@ -244,9 +257,9 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
                 }
 
                 if let Some(matcher) = trgt_matcher.as_mut(){
-                    if cur_o_pos + matcher.hash_win_len() <= max_trgt_match_len{
-                        debug_assert!(matcher.peek_next_pos() == cur_o_pos, "sh.pos {} != cur o {}",matcher.peek_next_pos(),cur_o_pos);
-                        if let Some((match_start,length)) = matcher.find_best_trgt_match( trgt, cur_o_pos, matcher.peek_next_hash()) {
+                    if cur_o_pos + 4 <= max_trgt_match_len{
+                        debug_assert!(matcher.fwd_pos == cur_o_pos, "sh.pos {} != cur o {}",matcher.fwd_pos,cur_o_pos);
+                        if let Some((match_start,length)) = matcher.find_best_trgt_match( trgt) {
                             if length >= min_match{
                                 debug_assert!(match_start + length <= cur_o_pos);
                                 debug_assert!(trgt[match_start..match_start+length] == trgt[cur_o_pos..cur_o_pos+length]);
@@ -288,10 +301,17 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
                     run_byte = next_char;
                 }
                 if let Some(matcher) = trgt_matcher.as_mut() {
-                    matcher.advance_and_store()
+                    matcher.store(matcher.fwd_hash as usize, cur_o_pos);
+                    if matcher.fwd_pos < matcher.max_fwd_hash_pos{
+                        matcher.fwd_hash = update_small_checksum_fwd(matcher.fwd_hash, trgt[cur_o_pos], trgt[cur_o_pos+4]);
+                        matcher.fwd_pos = cur_o_pos+1;
+                    }
                 }
-                if let Some(h) = large_hasher.as_mut(){
-                    h.next();
+                if let Some(m) = src_matcher.as_mut(){
+                    if m.fwd_pos < m.max_fwd_hash_pos{
+                        m.fwd_hash = update_large_checksum_fwd(m.fwd_hash, trgt[cur_o_pos], trgt[cur_o_pos+9]);
+                        m.fwd_pos = cur_o_pos+1;
+                    }
                 }
                 cur_o_pos += 1;
                 state = EncoderState::TryMatch;
