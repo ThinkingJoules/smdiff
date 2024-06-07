@@ -227,6 +227,7 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
                     if run_len >= min_match{
                         let run_start = cur_o_pos;// - min_match_value;
                         debug_assert!(trgt[run_start..].iter().take_while(|x|*x == &run_byte).count() == run_len,"{:?}",&trgt[run_start-min_match_value..run_start+run_len]);
+                        //dbg!(run_len);
                         ops.push(InnerOp::Run{byte:run_byte as u8,length:run_len,o_pos:run_start});
                         state = EncoderState::FoundMatch { match_len: run_len };
                         continue;
@@ -259,7 +260,7 @@ pub(crate) fn encode_inner(config:&mut GenericEncoderConfig,src:&[u8],trgt:&[u8]
                 if let Some(matcher) = trgt_matcher.as_mut(){
                     if cur_o_pos + 4 <= max_trgt_match_len{
                         debug_assert!(matcher.fwd_pos == cur_o_pos, "sh.pos {} != cur o {}",matcher.fwd_pos,cur_o_pos);
-                        if let Some((match_start,length)) = matcher.find_best_trgt_match( trgt) {
+                        if let Some((match_start,length)) = matcher.find_best_trgt_match(trgt,min_match) {
                             if length >= min_match{
                                 debug_assert!(match_start + length <= cur_o_pos);
                                 debug_assert!(trgt[match_start..match_start+length] == trgt[cur_o_pos..cur_o_pos+length]);

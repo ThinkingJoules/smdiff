@@ -37,11 +37,11 @@ impl TrgtMatcher {
     //     }
     // }
     ///Returns (trgt_pos, post_match) post_match *includes* the hash_win_len.
-    pub fn find_best_trgt_match(&self,trgt:&[u8])->Option<(usize,usize)>{
+    pub fn find_best_trgt_match(&self,trgt:&[u8],min_match:usize)->Option<(usize,usize)>{
         let cur_hash = self.fwd_hash as usize;
         let table_pos = self.table.get(cur_hash)?;
         let mut iter = std::iter::once(table_pos).chain(self.chain.iter_prev_starts(table_pos, self.fwd_pos,cur_hash)).filter(|start|start + 4 < self.fwd_pos);
-        let mut chain = self.chain_check;
+        let mut chain = if min_match > 4 {(self.chain_check/4).max(1)} else {self.chain_check};
         let mut best = None;
         let mut best_len = 0;
         let mut _chain_len = 0;
@@ -84,13 +84,13 @@ impl TrgtMatcher {
 
         }
         // if _collisions > 0{
-        //     dbg!(_chain_len,_collisions,cur_o_pos);
-        //     if cur_o_pos > 100{
+        //     dbg!(_chain_len,_collisions,self.fwd_pos);
+        //     if self.fwd_pos > 100{
         //         panic!();
         //     }
         // }
-        //dbg!(_chain_len,cur_o_pos);
-        //std::thread::sleep(std::time::Duration::from_millis(100));
+        // println!("MaxCheck: {}, Chain checked: {}, Fwd pos: {}, Collisions:{}, Best:{:?}",if min_match > 4 {(self.chain_check/4).max(1)} else {self.chain_check},_chain_len,self.fwd_pos,_collisions,best);
+        // std::thread::sleep(std::time::Duration::from_millis(100));
         best
     }
     pub(crate) fn store(&mut self, hash:usize, pos:usize){
@@ -125,12 +125,6 @@ pub struct TrgtMatcherConfig{
     /// How many historical hashes to store if we find multiple start points for a given hash.
     /// This memory is shared across all hashes. Leave blank for dynamic calculation.
     pub prev_table_capacity: Option<usize>,
-    /// The length of the hash to use for the source data.
-    /// Shorter hashes do not always make better matches.
-    /// They usually will match decent matches, but will effectively 'chop up' better matches.
-    /// Smaller hashes are faster to perform.
-    /// Since matching the trgt is like compression, the valid values are 3 or 4.
-    pub hash_win_len: Option<usize>,
 }
 
 impl Default for TrgtMatcherConfig {
@@ -146,16 +140,15 @@ impl TrgtMatcherConfig {
         assert!(level <= 9);
         let compress_early_exit = Ranger::new(0..10, 6..=70).map(level);
         let chain_check = Ranger::new(0..10, 1..=33).map(level);
-        Self { compress_early_exit, chain_check, prev_table_capacity: None , hash_win_len: None}
+        Self { compress_early_exit, chain_check, prev_table_capacity: None}
     }
     pub fn with_table_capacity(mut self, table_capacity:usize)->Self{
         self.prev_table_capacity = Some(table_capacity);
         self
     }
     pub(crate) fn build(&mut self,trgt:&[u8],trgt_start_pos:usize)->TrgtMatcher{
-        let Self { compress_early_exit, chain_check,hash_win_len, prev_table_capacity } = self;
+        let Self { compress_early_exit, chain_check, prev_table_capacity } = self;
         let effective_len = trgt.len() - trgt_start_pos;
-        let win_size = hash_win_len.get_or_insert(trgt_hash_len(effective_len));
         // self.prev_table_capacity =  Some(self.prev_table_capacity
         //     .unwrap_or_else(||{
         //         let exact = max_unique_substrings_gt_hash_len(*win_size, effective_len, 1);
@@ -163,7 +156,7 @@ impl TrgtMatcherConfig {
         //     }));
         prev_table_capacity.get_or_insert(DEFAULT_PREV_SIZE.min(effective_len.next_power_of_two()>>1));
         //let table = BasicHashTable::new(DEFAULT_TRGT_WIN_SIZE.min((effective_len + (effective_len/2)).next_power_of_two() >> 1), self.prev_table_capacity.unwrap(),if *win_size>4{8}else{4});
-        let table = BasicHashTable::new(DEFAULT_TRGT_WIN_SIZE.min((effective_len + (effective_len/2)).next_power_of_two() >> 1), *win_size<=4);
+        let table = BasicHashTable::new(DEFAULT_TRGT_WIN_SIZE.min((effective_len + (effective_len/2)).next_power_of_two() >> 1), true);
         let mut matcher = TrgtMatcher{
             compress_early_exit: *compress_early_exit,
             chain_check: *chain_check,
@@ -184,13 +177,5 @@ impl TrgtMatcherConfig {
             }
         }
         matcher
-    }
-}
-
-pub fn trgt_hash_len(len:usize)->usize{
-    if len <= 127{
-        3
-    }else{
-        4
     }
 }

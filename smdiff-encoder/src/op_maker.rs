@@ -1,16 +1,12 @@
 use smdiff_common::{Copy, CopySrc, MAX_INST_SIZE, MAX_RUN_LEN};
 
-use crate::{encoder::{GenericEncoderConfig, InnerOp}, Op};
+use crate::{encoder::InnerOp, Op};
 
 
 //this is sort of naive now. It could have better address cost optimization checking.
-pub fn translate_inner_ops<'a>(encoder_config:&GenericEncoderConfig,trgt:&'a [u8], mut ops: Vec<InnerOp>)->Vec<Op<'a>>{
+pub fn translate_inner_ops<'a>(trgt:&'a [u8], mut ops: Vec<InnerOp>)->Vec<Op<'a>>{
     //we are going to do two passes, one for adjusting the ops to be non-overlapping
     //the second for converting them to windows and Op structs for smdiff.
-    let src_min_match = encoder_config.match_src.as_ref()
-        .map(|a|a.hash_win_len.unwrap()).unwrap_or(9);
-    let trgt_min_match = encoder_config.match_trgt.as_ref()
-        .map(|a|a.hash_win_len.unwrap()).unwrap_or(4);
     //to avoid another allocation, removed ops will have their length set to 0
     let ops_len = ops.len();
     let mut one = 0;
@@ -42,7 +38,7 @@ pub fn translate_inner_ops<'a>(encoder_config:&GenericEncoderConfig,trgt:&'a [u8
         //now, are one and two nearly the same size? If so we just pick the larger one and remove the other
         //If we were to make them coincident we would end up with two really short copies, neither probably profitable.
         let span = two_end - one_p;
-        if span <= src_min_match + trgt_min_match || two_p - one_p <= 4 {
+        if span <= 9 + 4 || two_p - one_p <= 4 {
             //two overlapping instructions that are very small or start at nearly the same position
             //if nearly the same start, we just pick the larger one
             if one_len < *ops[two].len() {

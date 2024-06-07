@@ -11,6 +11,7 @@ impl BucketValue {
     fn get_value_unchecked(&self) -> usize {
         self.value - BUCKET_VALUE_OFFSET
     }
+    #[inline]
     pub(crate) fn get(&self,hash:usize) -> Option<usize> {
         if self.value == 0 {
             return None;
@@ -21,6 +22,7 @@ impl BucketValue {
             None
         }
     }
+    #[inline]
     pub(crate) fn set(&mut self, hash:usize, value: usize) -> Result<Option<usize>,(usize,usize)> {
         if self.value == 0 {
             self.hash = hash;
@@ -58,10 +60,15 @@ impl BasicHashTable{
     /// If interpret_hash_as_32_bit is true, the hash will be interpreted as a 32 bit value, regardless of the std::mem::size_of::<usize>().
     /// This allows for using small hashes on a 64 bit system.
     pub(crate) fn new(min_capacity: usize, interpret_hash_as_32_bit:bool) -> Self {
+        // For the capacity given, what power of 2 should we use?
         let num_bits = determine_hash_table_size_bits(min_capacity);
         let table_size = 1 << num_bits;
+        // Power of 2 - 1 is the mask for cheap modulo operation
         let mod_mask = table_size - 1;
-        //let shift_amount = (std::mem::size_of::<usize>() * 8) - num_bits;
+        // The shift amount is the number of bits to shift the hash to get the bucket index
+        // To deal with types easily and allow usage of a single table between 8 byte and 4 byte hashes
+        // we must shift the high bits right, but not off the end of the usize.
+        // The shifting is part of the bit mixing to spread out the values to the buckets
         let base_shift = if interpret_hash_as_32_bit {4} else {std::mem::size_of::<usize>()};
         let shift_amount = (base_shift * 8) - num_bits;
         let buckets = vec![BucketValue::default(); table_size];
@@ -73,29 +80,30 @@ impl BasicHashTable{
     }
 }
 impl BasicHashTable {
-    #[inline(always)]
+    #[inline]
     pub(crate) fn get(&self,hash:usize)->Option<usize>{
         let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
         self.buckets[idx].get(hash)
     }
-    #[inline(always)]
+    #[inline]
     pub(crate) fn insert(&mut self, hash: usize, position: usize) -> Result<Option<usize>,(usize,usize)> {
         let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
         self.buckets[idx].set(hash, position)
     }
-    /// Inserts a new position into the hash table conditional on if the old position is old enough.
-    /// * hash: The hash of the key
-    /// * position: The new position to insert
-    /// * old_lt: Will only insert if the to-be-evicted position is less than this value. (always inserts if unset)
-    #[inline(always)]
-    pub(crate) fn insert_cond(&mut self, hash: usize, position: usize,old_lt:usize) -> Result<Option<usize>,(usize,usize)> {
-        let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
-        let bucket = &mut self.buckets[idx];
-        if bucket.value == 0 || bucket.value > 0 && bucket.value - BUCKET_VALUE_OFFSET < old_lt {
-            return bucket.set(hash, position)
-        }
-        Err((hash,position)) //could not set
-    }
+    // //Experimental, didn't seem to have much of an effect
+    // /// Inserts a new position into the hash table conditional on if the old position is old enough.
+    // /// * hash: The hash of the key
+    // /// * position: The new position to insert
+    // /// * old_lt: Will only insert if the to-be-evicted position is less than this value. (always inserts if unset)
+    // #[inline(always)]
+    // pub(crate) fn insert_cond(&mut self, hash: usize, position: usize,old_lt:usize) -> Result<Option<usize>,(usize,usize)> {
+    //     let idx = get_bucket_idx(hash, self.shift_amount, self.mod_mask);
+    //     let bucket = &mut self.buckets[idx];
+    //     if bucket.value == 0 || bucket.value > 0 && bucket.value - BUCKET_VALUE_OFFSET < old_lt {
+    //         return bucket.set(hash, position)
+    //     }
+    //     Err((hash,position)) //could not set
+    // }
 
 }
 
@@ -104,9 +112,12 @@ fn determine_hash_table_size_bits(slots: usize) -> usize {
     ((slots+1).next_power_of_two().trailing_zeros() as usize)
         .clamp(3, std::mem::size_of::<usize>() * 8) - 1
 }
+/// Gets the bucket index for a given hash.
 #[inline(always)]
 fn get_bucket_idx(checksum: usize, shift_amt:usize, mod_mask:usize) -> usize {
-   (checksum >> shift_amt) ^ (checksum & mod_mask)
+   (checksum >> shift_amt) // move high bits down
+    ^ //mix the bits with xor
+    (checksum & mod_mask) //ensure the final value is within the table bounds (mod op)
 }
 
 
@@ -142,7 +153,7 @@ impl ChainList {
     /// Gets the previous position for a given position.
     /// last_pos: The current position (BUCKET_VALUE_OFFSET is already subtracted)
     /// Returns the previous position with BUCKET_VALUE_OFFSET subtracted. (or none if bucket value == 0)
-    #[inline(always)]
+    #[inline]
     fn get_prev_pos(&self, last_pos: usize) -> Option<&BucketValue> {
         if self.positions.is_empty() {
             return None;
@@ -156,7 +167,7 @@ impl ChainList {
     /// Inserts a new position into the chain.
     /// key: The parent position in the chain (new head) (BUCKET_VALUE_OFFSET is already subtracted)
     /// new_pos: The new position to insert
-    #[inline(always)]
+    #[inline]
     pub(crate) fn insert(&mut self, hash:usize, key_position: usize, position: usize) {
         if self.positions.is_empty() {return;}
         let _ = self.positions.get_mut(key_position & self.mod_mask).unwrap().set(hash, position);

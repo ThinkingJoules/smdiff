@@ -1,113 +1,5 @@
 
-// pub enum LargeHashCursor<'a>{
-//     Direct(SmallHashCursor<'a>),
-//     Rolling(RollingHashCursor<'a>),
-// }
-
-// impl<'a> LargeHashCursor<'a> {
-//     pub fn new(slice:&'a [u8], hash_window_len: usize) -> Self {
-//         if (3..=4).contains(&hash_window_len) {
-//             let cursor = SmallHashCursor::new(slice, hash_window_len);
-//             LargeHashCursor::Direct(cursor)
-//         } else if (5..=9).contains(&hash_window_len){
-//             let config = RollingHashConfig::new(hash_window_len);
-//             let cursor = RollingHashCursor::new(slice,hash_window_len, &config);
-//             LargeHashCursor::Rolling(cursor)
-//         }else{
-//             panic!("Valid hash window sizes are 3-9")
-//         }
-//     }
-//     pub fn data_len(&self) -> usize {
-//         match self {
-//             LargeHashCursor::Direct(cursor) => {
-//                 cursor.slice.len()
-//             }
-//             LargeHashCursor::Rolling(cursor) => {
-//                 cursor.slice.len()
-//             }
-//         }
-//     }
-//     pub(crate) fn win_size(&self) -> usize {
-//         match self {
-//             LargeHashCursor::Direct(cursor) => {
-//                 cursor.win_size()
-//             }
-//             LargeHashCursor::Rolling(cursor) => {
-//                 cursor.rolling_hash.win_len as usize
-//             }
-//         }
-
-//     }
-// }
-
-// impl<'a> HasherCusor for LargeHashCursor<'a> {
-//     fn next(&mut self) -> Option<(usize, usize)> {
-//         match self {
-//             LargeHashCursor::Direct(cursor) => {
-//                 cursor.next()
-//             }
-//             LargeHashCursor::Rolling(cursor) => {
-//                 cursor.next()
-//             }
-//         }
-//     }
-
-//     fn prev(&mut self) -> Option<(usize, usize)> {
-//         match self {
-//             LargeHashCursor::Direct(cursor) => {
-//                 cursor.prev()
-//             }
-//             LargeHashCursor::Rolling(cursor) => {
-//                 cursor.prev()
-//             }
-//         }
-//     }
-
-//     fn seek(&mut self, pos: usize) -> Option<usize> {
-//         match self {
-//             LargeHashCursor::Direct(cursor) => {
-//                 cursor.seek(pos)
-//             }
-//             LargeHashCursor::Rolling(cursor) => {
-//                 cursor.seek(pos)
-//             }
-//         }
-//     }
-//     fn peek_next_pos(&self) -> usize {
-//         match self {
-//             LargeHashCursor::Direct(cursor) => {
-//                 cursor.peek_next_pos()
-//             }
-//             LargeHashCursor::Rolling(cursor) => {
-//                 cursor.peek_next_pos()
-//             }
-//         }
-//     }
-//     fn peek_next_hash(&self) -> usize {
-//         match self {
-//             LargeHashCursor::Direct(cursor) => {
-//                 cursor.peek_next_hash()
-//             }
-//             LargeHashCursor::Rolling(cursor) => {
-//                 cursor.peek_next_hash()
-//             }
-//         }
-//     }
-// }
-
-// pub trait HasherCusor{
-//     /// Returns the (next hash, position in the slice).
-//     fn next(&mut self) -> Option<(usize, usize)>;
-//     /// Returns the (prev hash, position in the slice).
-//     fn prev(&mut self) -> Option<(usize, usize)>;
-//     /// Seeks to a specific position in the slice and returns the hash (or None if the position is invalid)
-//     fn seek(&mut self, pos: usize) -> Option<usize>;
-//     /// Current position in the slice
-//     fn peek_next_pos(&self) -> usize;
-//     /// Hash of the current position
-//     fn peek_next_hash(&self) -> usize;
-// }
-
+#![allow(dead_code)]
 const HASH_MULTIPLIER_32_BIT: u32 = 1597334677;
 const HASH_MULTIPLIER_64_BIT: u64 = 1181783497276652981;
 
@@ -190,7 +82,8 @@ pub(crate) fn calculate_small_checksum(data: &[u8]) -> u32 {
             acc.wrapping_add(power.wrapping_mul(*byte as u32))
         })
 }
-
+//I tested a couple multipliers but none seemed to have much effect on speed of final encoding.
+//Probably needs to be looked at since my trgt matcher sucks.
 #[inline(always)]
 pub(crate) fn update_small_checksum_fwd(checksum: u32, old:u8, new:u8) -> u32 {
     (3141592653u32).wrapping_mul(checksum)//multiply to 'shift values' left
@@ -198,346 +91,48 @@ pub(crate) fn update_small_checksum_fwd(checksum: u32, old:u8, new:u8) -> u32 {
     .wrapping_add(new as u32)
 }
 
+// This is about a wash compared to the rolling method.
 // #[inline(always)]
 // pub(crate) fn calculate_small_checksum_direct(data: &[u8]) -> u32 {
 //     let state = u32::from_ne_bytes(data[0..4].try_into().unwrap());
 //     state.wrapping_mul(HASH_MULTIPLIER_32_BIT)
 // }
 
-// #[derive(Clone, Debug)]
-// pub(crate) struct RollingHasher {
-//     config: RollingHashConfig,
-//     hash: usize,
-//     win: [u8; 9],
-//     win_pos: ModuloUsize,
-//     win_len: usize,
-// }
-
-// impl RollingHasher {
-//     pub(crate) fn new(initial_win: &[u8],config:&RollingHashConfig) -> Self {
-//         assert_eq!(initial_win.len(), config.hash_window_len);
-//         assert!(config.hash_window_len <= 9);
-//         let win_len = config.hash_window_len;
-//         let mut win = [0; 9];
-//         win[..win_len].copy_from_slice(&initial_win);
-//         let hash = config.calculate_large_checksum(&initial_win);
-//         Self {
-//             config: config.clone(),
-//             hash,
-//             win,
-//             win_pos: ModuloUsize::new(win_len),
-//             win_len: win_len,
-//         }
-//     }
-
-//     fn jump(&mut self, new_win: &[u8]) {
-//         assert_eq!(new_win.len(), self.win_len as usize);
-//         self.hash = self.config.calculate_large_checksum(new_win);
-//         (&mut self.win[..self.win_len as usize]).copy_from_slice(&new_win[..self.win_len as usize]);
-//         self.win_pos.value = 0;
-//     }
-//     #[inline(always)]
-//     pub(crate) fn update_fwd(&mut self, new_char: u8) {
-//         let buf_pos = self.win_pos.get();
-//         let old_char = self.win[buf_pos];
-//         self.hash = self.config.update_large_checksum_fwd(self.hash, old_char, new_char);
-//         self.win[buf_pos] = new_char;
-//         self.win_pos.increment();
-//     }
-//     #[inline(always)]
-//     pub(crate) fn update_bwd(&mut self, new_char: u8) {
-//         let buf_pos = self.win_pos.get_last();
-//         let old_char = self.win[buf_pos];
-//         self.hash = self.config.update_large_checksum_bwd(self.hash, old_char, new_char);
-//         self.win[buf_pos] = new_char;
-//         self.win_pos.decrement();
-//     }
-
-//     pub(crate) fn hash(&self) -> usize {
-//         self.hash
-//     }
-// }
-
-// #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-// struct ModuloUsize {
-//     value: usize,
-//     modulo: usize,
-// }
-
-// impl ModuloUsize {
-//     fn new(modulo: usize) -> Self {
-//         Self { value: 0, modulo }
-//     }
-
-//     fn get(&self) -> usize {
-//         self.value
-//     }
-//     fn get_last(&self) -> usize {
-//         if self.value == 0 {
-//             self.modulo - 1
-//         } else {
-//             self.value - 1
-//         }
-//     }
-
-//     fn increment(&mut self) {
-//         self.value = (self.value + 1) % self.modulo;
-//     }
-
-//     fn decrement(&mut self) {
-//         self.value = (self.value + self.modulo - 1) % self.modulo; // Handle underflow
-//     }
-// }
-
-// #[derive(Clone, Debug)]
-// pub(crate) struct RollingHashCursor<'a> {
-//     rolling_hash: RollingHasher,
-//     slice: &'a [u8],
-//     rolling_hash_start_pos: usize,
-// }
-// impl<'a> RollingHashCursor<'a>{
-//     pub(crate) fn new(slice: &'a [u8], win_size:usize, config:&RollingHashConfig) -> Self {
-//         let rolling_hash = RollingHasher::new(&slice[..win_size],config);
-//         RollingHashCursor {
-//             rolling_hash,
-//             slice,
-//             rolling_hash_start_pos: 0,
-//         }
-//     }
-// }
-// impl<'a> HasherCusor for RollingHashCursor<'a> {
-//     #[inline(always)]
-//     fn next(&mut self) -> Option<(usize, usize)> {
-//         let win_len = self.rolling_hash.win_len as usize;
-//         let end_pos = self.rolling_hash_start_pos + win_len;
-//         if end_pos > self.slice.len() {
-//             return None;
-//         }
-//         let hash = self.rolling_hash.hash();
-//         let start_pos = self.rolling_hash_start_pos;
-//         if end_pos < self.slice.len() {
-//             self.rolling_hash.update_fwd(self.slice[end_pos]);
-//         }
-//         self.rolling_hash_start_pos += 1;
-//         Some((hash, start_pos))
-//     }
-//     #[inline(always)]
-//     fn prev(&mut self) -> Option<(usize, usize)> {
-//         if self.rolling_hash_start_pos == 0 {
-//             return None;
-//         }
-
-//         self.rolling_hash_start_pos -= 1;
-//         self.rolling_hash.update_bwd(self.slice[self.rolling_hash_start_pos]);
-//         let hash = self.rolling_hash.hash();
-//         Some((hash, self.rolling_hash_start_pos))
-//     }
-//     fn seek(&mut self, pos: usize)-> Option<usize> {
-//         //dbg!(pos,self.rolling_hash_start_pos,self.rolling_hash.win);
-//         if pos == self.rolling_hash_start_pos{
-//             return Some(self.rolling_hash.hash());
-//         }
-//         let win_len = self.rolling_hash.win_len as usize;
-//         let end_pos = pos + win_len;
-//         if end_pos > self.slice.len() {
-//             return None;
-//         }
-//         let prev_end = self.rolling_hash_start_pos + win_len;
-//         //if self.start_pos..self.start_pos + self.rolling_hash.win_len.contains(&pos) we should just call next the right amount of times
-//         if (self.rolling_hash_start_pos..prev_end).contains(&pos){
-//             let diff = pos - self.rolling_hash_start_pos;
-//             for _ in 0..diff{
-//                 self.next();
-//             }
-//             debug_assert_eq!(self.rolling_hash_start_pos,pos);
-//             return Some(self.rolling_hash.hash());
-//         }else if (self.rolling_hash_start_pos.saturating_sub(win_len)..self.rolling_hash_start_pos).contains(&pos){
-//             let diff = self.rolling_hash_start_pos - pos;
-//             for _ in 0..diff{
-//                 self.prev();
-//             }
-//             debug_assert_eq!(self.rolling_hash_start_pos,pos);
-//             return Some(self.rolling_hash.hash());
-//         }
-//         //else make a new hash
-//         self.rolling_hash_start_pos = pos;
-//         self.rolling_hash.jump(&self.slice[pos..end_pos]);
-//         return Some(self.rolling_hash.hash());
-//     }
-//     fn peek_next_pos(&self) -> usize {
-//         self.rolling_hash_start_pos
-//     }
-//     fn peek_next_hash(&self) -> usize {
-//         self.rolling_hash.hash()
-//     }
-// }
-// pub struct SmallHashCursor<'a> {
-//     slice: &'a [u8],
-//     rolling_hash_start_pos: usize,
-//     cur_hash: usize,
-//     win_size: usize,
-// }
-// impl<'a> SmallHashCursor<'a> {
-//     pub(crate) fn win_size(&self) -> usize {
-//         self.win_size
-//     }
-//     pub(crate) fn new(slice: &'a [u8], win_size: usize) -> Self {
-//         assert!((3..=4).contains(&win_size));
-//         let mut crsr = SmallHashCursor {
-//             slice,
-//             rolling_hash_start_pos: 0,
-//             cur_hash: 0,
-//             win_size,
-//         };
-//         crsr.cur_hash = crsr.calc_checksum(0);
-//         crsr
-//     }
-//     // #[cfg(target_pointer_width = "32")]
-//     #[inline(always)]
-//     fn calc_checksum(&self,position:usize) -> usize {
-//         let state = if self.win_size == 4 {
-//             u32::from_ne_bytes(self.slice[position..position + 4].try_into().unwrap())
-//         } else {
-//             u32::from_be_bytes([self.slice[position], self.slice[position+1], self.slice[position+2], 0])
-//         };
-//         state.wrapping_mul(HASH_MULTIPLIER_32_BIT) as usize
-//     }
-//     // #[cfg(target_pointer_width = "64")]
-//     // fn calc_checksum(&self,position:usize) -> usize {
-//     //     let state = if self.win_size == 4 {
-//     //         u32::from_ne_bytes(self.slice[position..position + 4].try_into().unwrap())
-//     //     } else {
-//     //         u32::from_be_bytes([self.slice[position], self.slice[position+1], self.slice[position+2], 0])
-//     //     };
-//     //     (state.wrapping_mul(HASH_MULTIPLIER_32_BIT) as usize) << 32 //move bits to the high end
-//     // }
-// }
-// impl HasherCusor for SmallHashCursor<'_> {
-//     #[inline(always)]
-//     fn next(&mut self) -> Option<(usize, usize)> {
-//         let end_pos = self.rolling_hash_start_pos + self.win_size;
-//         if end_pos > self.slice.len() {
-//             return None;
-//         }
-//         let hash = self.cur_hash;
-//         let start_pos = self.rolling_hash_start_pos;
-//         self.rolling_hash_start_pos += 1;
-//         self.cur_hash = self.calc_checksum(self.rolling_hash_start_pos);
-//         Some((hash, start_pos))
-//     }
-//     #[inline(always)]
-//     fn prev(&mut self) -> Option<(usize, usize)> {
-//         if self.rolling_hash_start_pos == 0 {
-//             return None;
-//         }
-//         self.rolling_hash_start_pos -= 1;
-//         self.cur_hash = self.calc_checksum(self.rolling_hash_start_pos);
-//         Some((self.cur_hash, self.rolling_hash_start_pos))
-//     }
-//     #[inline(always)]
-//     fn seek(&mut self, pos: usize) -> Option<usize> {
-//         if pos == self.rolling_hash_start_pos {
-//             return Some(self.cur_hash);
-//         }
-//         let end_pos = pos + self.win_size;
-//         if end_pos > self.slice.len() {
-//             return None;
-//         }
-//         self.rolling_hash_start_pos = pos;
-//         self.cur_hash = self.calc_checksum(pos);
-//         Some(self.cur_hash)
-//     }
-//     fn peek_next_pos(&self) -> usize {
-//         self.rolling_hash_start_pos
-//     }
-//     fn peek_next_hash(&self) -> usize {
-//         self.cur_hash
-//     }
-// }
 
 
 
 
-// #[cfg(test)]
-// mod test_super {
+#[cfg(test)]
+mod test_super {
+    use super::*;
 
-//     use super::*;
-//     #[test]
-//     fn test_initial_hash() {
-//         let initial_data = b"hello world, this is a test of some hashing"; // Example data
-//         let config = RollingHashConfig::new(8);
-//         let mh = RollingHasher::new(&initial_data[..8],&config);
-//         dbg!(mh.hash());
-//         assert_eq!(mh.hash, config.calculate_large_checksum(&initial_data[..8]));
-//     }
+    #[test]
+    fn test_rolling_hash_fwd() {
+        let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
+        // Simulate a rolling window
+        let mut hash = calculate_large_checksum(&initial_data[..]);
+        for i in 1..(initial_data.len() - 20) {
+            let old_char = initial_data[i - 1];
+            let new_char = initial_data[i + 8];
+            let expected_hash = calculate_large_checksum(&initial_data[i..]);
+            hash = update_large_checksum_fwd(hash, old_char, new_char);
+            assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
+        }
+    }
 
-//     #[test]
-//     fn test_rolling_hash_fwd() {
-//         let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
-//         let config = RollingHashConfig::new(8);
-//         let mut mh = RollingHasher::new(&initial_data[..8],&config);
-//         let mut crsr = RollingHashCursor::new(initial_data,8,&config);
-//         // Simulate a rolling window
-//         let mut hash = config.calculate_large_checksum(&initial_data[..8]);
-//         let (crsr_hash,_) = crsr.next().unwrap();
-//         assert_eq!(crsr_hash, hash);
-//         for i in 1..(initial_data.len() - 20) {
-//             let old_char = initial_data[i - 1];
-//             let new_char = initial_data[i + 7];
-//             let expected_hash = config.calculate_large_checksum(&initial_data[i..i+8]);
-//             hash = config.update_large_checksum_fwd(hash, old_char, new_char);
-//             assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
-//             mh.update_fwd(new_char);
-//             assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
-//             let (hash2,pos) = crsr.next().unwrap();
-//             assert_eq!(pos,i, "HashCrsr wrong output position");
-//             assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
-//         }
-//     }
-
-//     #[test]
-//     fn test_rolling_hash_bwd() {
-//         let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
-//         let config = RollingHashConfig::new(8);
-//         let start_i = (initial_data.len() - 20)-8;
-//         let init = &initial_data[start_i..start_i+8];
-//         let mut mh = RollingHasher::new(init,&config);
-//         let mut crsr = RollingHashCursor::new(initial_data,8,&config);
-//         // Simulate a rolling window
-//         let mut hash = config.calculate_large_checksum(init);
-//         let crsr_hash = crsr.seek(start_i).unwrap();
-//         assert_eq!(crsr_hash, hash);
-//         for i in (0..start_i).rev() {
-//             let hash_win = &initial_data[i..i+8];
-//             let new_char = initial_data[i];
-//             let old_char = initial_data[i + 8];
-//             let expected_hash = config.calculate_large_checksum(hash_win);
-//             hash = config.update_large_checksum_bwd(hash, old_char, new_char);
-//             assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
-//             mh.update_bwd(new_char);
-//             assert_eq!(mh.hash(), expected_hash, "RollingHash.update Failed at starting index {}", i);
-//             let (hash2,pos) = crsr.prev().unwrap();
-//             assert_eq!(pos,i, "HashCrsr wrong output position");
-//             assert_eq!(hash2, expected_hash, "HashCrsr.next Failed at starting index {}", i);
-//         }
-//     }
-
-//     #[test]
-//     fn test_hash_cursor() {
-//         let data = b"hello world, this is a test of the rolling hash";
-//         let config = RollingHashConfig::new(8);
-//         let mut cursor = RollingHashCursor::new(data,8,&config);
-//         let mut answers = Vec::new();
-//         for _ in 0..5{
-//             let (hash,pos) = cursor.next().unwrap();
-//             answers.push((hash,pos));
-//         }
-//         answers.sort_by(|a,b|a.0.cmp(&b.0));
-//         for (hash,pos) in answers{
-//             dbg!(hash,pos);
-//             let new_hash = cursor.seek(pos).unwrap();
-//             assert_eq!(hash,new_hash);
-//         }
-//     }
-
-// }
+    #[test]
+    fn test_rolling_hash_bwd() {
+        let initial_data = b"hello world, this is a test of the rolling hash"; // Longer example
+        let start_i = (initial_data.len() - 20)-9;
+        // Simulate a rolling window
+        let mut hash = calculate_large_checksum(&initial_data[start_i..]);
+        for i in (0..start_i).rev() {
+            let hash_win = &initial_data[i..];
+            let new_char = initial_data[i];
+            let old_char = initial_data[i + 9];
+            let expected_hash = calculate_large_checksum(hash_win);
+            hash = update_large_checksum_bwd(hash, old_char, new_char);
+            assert_eq!(hash,expected_hash, "config.update Failed at starting index {}", i);
+        }
+    }
+}

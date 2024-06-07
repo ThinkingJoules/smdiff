@@ -234,8 +234,8 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: Option<&m
         naive_tests,
     };
     let segments = encoder::encode_inner(&mut inner_config, src, trgt);
-    dbg!(&inner_config);
-    let ops = translate_inner_ops(&inner_config, trgt, segments);
+    // dbg!(&inner_config);
+    let ops = translate_inner_ops(trgt, segments);
     let mut cur_o_pos: usize = 0;
     let mut win_data = Vec::new();
     for (seg_ops,mut header) in make_sections(&ops, segment_size){
@@ -263,90 +263,7 @@ pub fn encode<R: std::io::Read+std::io::Seek, W: std::io::Write>(dict: Option<&m
 }
 
 
-fn max_unique_substrings_gt_hash_len(hash_win_len: usize, win_size: usize, l_step: usize) -> usize {
-    let m = win_size / l_step;
-    let mut x = 0;
-    while m / (hash_win_len + x) > 256usize.pow(x as u32) - 1 {
-        x += 1;
-    }
-    std::cmp::min(m / (hash_win_len + x),256usize.pow(x as u32))
-}
-
-/// Returns the cost of the next address based on the absolute distance from `cur_addr`.
-fn _addr_cost(cur_addr: u64, next_addr: u64) -> isize {
-    let mut diff = cur_addr as i64 - next_addr as i64;
-    if diff<0 {
-        diff += 1 //to get the correct range for negative values
-    }
-    let diff = diff.abs() as u64;
-
-    match diff {
-        0..=63 => -1,            // closest range
-        64..=8191 => -2,         // second closest range
-        8192..=1048575 => -3,    // third closest range
-        1048576..=134217727 => -4, // fourth closest range
-        _ => -5,                // beyond expected range
-    }
-}
-
-
-// #[derive(Copy, Clone, Debug, Default, Ord, Eq)]
-// struct CopyScore{
-//     pub score: isize,
-//     pub size: usize,
-//     pub addr_cost: isize,
-//     pub size_cost: isize,
-//     pub start: usize,
-// }
-// impl PartialEq for CopyScore {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.score == other.score
-//             && self.size == other.size
-//             && self.addr_cost == other.addr_cost
-//             && self.size_cost == other.size_cost
-//     }
-// }
-
-// impl PartialOrd for CopyScore {
-//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-//         let score_cmp = self.score.partial_cmp(&other.score);
-//         if score_cmp != Some(Ordering::Equal) {
-//             return score_cmp;
-//         }
-
-//         let size_cmp = self.size.partial_cmp(&other.size);
-//         if size_cmp != Some(Ordering::Equal) {
-//             return size_cmp;
-//         }
-
-//         let addr_cost_cmp = self.addr_cost.partial_cmp(&other.addr_cost);
-//         if addr_cost_cmp != Some(Ordering::Equal) {
-//             return addr_cost_cmp;
-//         }
-
-//         let size_cost_cmp = self.size_cost.partial_cmp(&other.size_cost);
-//         if size_cost_cmp != Some(Ordering::Equal) {
-//             return size_cost_cmp;
-//         }
-
-//         Some(Ordering::Equal)
-//     }
-// }
-
-// impl CopyScore {
-//     fn new(addr_cost:isize, size:usize,start:usize)->Self{
-//         let size_cost = size_cost(size);
-//         let score = addr_cost.saturating_add(size_cost).saturating_add(size as isize).saturating_sub(-1);
-//         CopyScore{score,addr_cost,size_cost,size,start}
-//     }
-//     // fn compression_ratio(&self)->f64{
-//     //     self.size as f64 / ((self.addr_cost + self.size_cost -1)*-1) as f64
-//     // }
-// }
-// fn size_cost(size: usize) -> isize {
-//     -((size > 62) as isize) - (size > 317) as isize
-// }
-
+/// This just simplifies mapping a 0..9 comp_level to various ranges for various settings.
 struct Ranger {
     input_range: Range<usize>,
     output_range: RangeInclusive<usize>,
@@ -385,34 +302,6 @@ impl Ranger {
 mod test_super {
     use super::*;
 
-    #[test]
-    fn test_calculate_prev_list_size() {
-        let test_cases = [
-            (3, 1 << 26, 2, 4),
-            (5, 1 << 26, 2, 4),
-            (7, 1 << 26, 2, 4),
-            (9, 1 << 26, 2, 4),
-            (4, 1 << 28, 2, 4),
-            (5, 1 << 28, 2, 4),
-            (6, 1 << 28, 2, 4),
-            (7, 1 << 28, 2, 4),
-            (8, 1 << 28, 2, 4),
-            (3, 1 << 7, 2, 4),
-            (4, 16_383, 2, 4),
-            (5, 2_097_151, 2, 4),
-            (6, 6_998_841, 2, 4),
-            (7, 23_541_202, 2, 4),
-            (8, 79_182_851, 2, 4),
-        ];
-
-        for (hash_win_len, win_size, l_step, _expected_chain_len) in test_cases {
-            let chain_len = max_unique_substrings_gt_hash_len(hash_win_len, win_size, l_step);
-            println!("hash_win_len={}, win_size={}, l_step={}, chain_len={} ({})", hash_win_len, win_size, l_step, chain_len,(chain_len + chain_len/2).next_power_of_two()>>1);
-            // assert_eq!(chain_len, expected_chain_len,
-            //            "Failed for hash_win_len={}, win_size={}, l_step={}",
-            //            hash_win_len, win_size, l_step);
-        }
-    }
 
     #[test]
     fn test_regular_mapping() {
@@ -430,15 +319,6 @@ mod test_super {
         assert_eq!(interpolator.map(8), 78);
         assert_eq!(interpolator.map(9), 89);
         assert_eq!(interpolator.map(10), 100);
-    }
-    #[test]
-    fn test_regular_mapping2() {
-        let input_range = 0..10;
-        let output_range = 26..=2;
-        let interpolator = Ranger::new(input_range, output_range);
-
-        assert_eq!(interpolator.map(9), 2);
-
     }
 
     #[test]
