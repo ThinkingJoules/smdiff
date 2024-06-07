@@ -176,12 +176,12 @@ pub(crate) fn update_large_checksum_bwd(checksum: usize, old:u8, new:u8) -> usiz
     .wrapping_mul(MOD_INV)
 }
 const SMALL_POWERS: [u32; 4] = [
-    1152009645,
-    1664532153,
-    1597334677,
+    1143961941,
+    1940812585,
+    3141592653,
     1,
 ];
-const SMALL_FIRST_BYTE_WEIGHT: u32 = 438510001;
+const SMALL_FIRST_BYTE_WEIGHT: u32 = 2508840081;
 #[inline(always)]
 pub(crate) fn calculate_small_checksum(data: &[u8]) -> u32 {
     data.iter()
@@ -193,10 +193,16 @@ pub(crate) fn calculate_small_checksum(data: &[u8]) -> u32 {
 
 #[inline(always)]
 pub(crate) fn update_small_checksum_fwd(checksum: u32, old:u8, new:u8) -> u32 {
-    (HASH_MULTIPLIER_32_BIT).wrapping_mul(checksum)//multiply to 'shift values' left
+    (3141592653u32).wrapping_mul(checksum)//multiply to 'shift values' left
     .wrapping_sub(SMALL_FIRST_BYTE_WEIGHT.wrapping_mul(old as u32))
     .wrapping_add(new as u32)
 }
+
+// #[inline(always)]
+// pub(crate) fn calculate_small_checksum_direct(data: &[u8]) -> u32 {
+//     let state = u32::from_ne_bytes(data[0..4].try_into().unwrap());
+//     state.wrapping_mul(HASH_MULTIPLIER_32_BIT)
+// }
 
 // #[derive(Clone, Debug)]
 // pub(crate) struct RollingHasher {
