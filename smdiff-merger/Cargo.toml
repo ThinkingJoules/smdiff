@@ -6,7 +6,7 @@ repository = "https://github.com/ThinkingJoules/smdiff"
 description = "A library for merging SMDIFF delta files together."
 license = "MIT"
 keywords = ["smdiff", "delta", "patch", "delta-encoding", "delta-compression"]
-categories = ["compression","encoding","decoding"]
+categories = ["compression","encoding"]
 
 [dependencies]
 smdiff-common ={ version = "0.5.0", path = "../smdiff-common" }
