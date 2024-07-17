@@ -6,7 +6,7 @@ use smdiff_encoder::{writer::section_writer, SecondaryCompression};
 use smdiff_reader::Op;
 use smdiff_writer::make_sections;
 
-
+pub mod transcoder;
 ///Extracted Instruction with the starting position in the output buffer.
 pub type SparseOp = (u64, Op);
 

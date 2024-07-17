@@ -1,6 +1,6 @@
 [package]
 name = "smdiff-merger"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 repository = "https://github.com/ThinkingJoules/smdiff"
 description = "A library for merging SMDIFF delta files together."
