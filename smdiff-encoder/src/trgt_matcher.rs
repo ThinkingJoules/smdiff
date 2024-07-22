@@ -164,7 +164,7 @@ impl TrgtMatcherConfig {
             fwd_pos: trgt_start_pos,
             table,
             chain: ChainList::new(self.prev_table_capacity.unwrap()),
-            max_fwd_hash_pos: trgt.len()-4,
+            max_fwd_hash_pos: trgt.len().saturating_sub(4),
         };
         if trgt_start_pos > 0 { //prefill with hash start positions.
             let start = trgt_start_pos.saturating_sub(self.prev_table_capacity.unwrap());

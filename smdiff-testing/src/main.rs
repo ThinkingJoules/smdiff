@@ -39,6 +39,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
 
     // test_sec_comp_working()?;
 
+    encode_test_lt_hash_len()?;
     // encode_test_micro()?;
     // encode_test_small()?;
     // encode_test_large()?;
@@ -50,7 +51,7 @@ fn main()-> Result<(), Box<dyn std::error::Error>> {
     // analyze_sec_comp_large_file_best(true)?;
     // analyze_sec_comp_sentence_best()?;
 
-    new_encode_test_gcc_2951_2952()?;
+    //new_encode_test_gcc_2951_2952()?;
     Ok(())
 }
 

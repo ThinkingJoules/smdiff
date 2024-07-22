@@ -1,12 +1,12 @@
 [package]
 name = "smdiff-encoder"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 repository = "https://github.com/ThinkingJoules/smdiff"
 description = "A library for generating SMDIFF delta patches."
 license = "MIT"
 keywords = ["smdiff", "delta", "patch", "delta-encoding", "delta-compression"]
-categories = ["compression","encoding","decoding"]
+categories = ["compression","encoding"]
 
 
 [dependencies]

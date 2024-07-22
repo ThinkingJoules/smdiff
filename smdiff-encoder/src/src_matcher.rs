@@ -95,7 +95,7 @@ pub(crate) fn add_start_positions_to_matcher(matcher: &mut SrcMatcher, cur_o_pos
                 matcher.store(hash, pos)
             }
         }else{
-            let aligned_last_hash = align(range.end-9,matcher.l_step);
+            let aligned_last_hash = align(range.end.saturating_sub(9),matcher.l_step);
             let mut hash = calculate_large_checksum(&src[aligned_last_hash..range.end]);
             for pos in (range.start..aligned_last_hash).rev() {
                 hash = update_large_checksum_bwd(hash, src[pos+9], src[pos]);
@@ -167,13 +167,13 @@ impl SrcMatcherConfig {
             src_len,
             trgt_len,
             src_win_size:self.max_src_win_size.unwrap(),
-            max_end_pos:align(src_len-9,self.l_step),
+            max_end_pos:align(src_len.saturating_sub(9),self.l_step),
         }
     }
     pub(crate) fn build(&mut self,src:&[u8],trgt_start_pos:usize,trgt:&[u8])->SrcMatcher{
         let trgt_len = trgt.len();
         let InnerConfig { l_step, src_len, trgt_len, src_win_size, max_end_pos } = self.make_inner_config(src.len(),trgt_len);
-        let max_fwd_hash_pos = trgt.len() - 9;
+        let max_fwd_hash_pos = trgt.len().saturating_sub(9);
         let (fwd_hash,fwd_pos) = if trgt_start_pos < max_fwd_hash_pos {
             (calculate_large_checksum(&trgt[trgt_start_pos..trgt_start_pos+9]),trgt_start_pos)
         }else{
